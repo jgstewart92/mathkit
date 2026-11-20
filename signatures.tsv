@@ -1,0 +1,29 @@
+# method	grep -E pattern	row (mathkit header)	positive control: an existing house copy it matches
+cg	(rz|rho)[0-9]* */ *(rz|rho|dot|pq)\b	mk_sparse.h mk_cg	bioheat/bioheat.c cudakit/src/spd3.cu
+ic0	[Ii]ncomplete [Cc]holesky|\bIC\(0\)|\bic0	mk_sparse.h MK_PC_IC0	mathkit/include/mk_sparse.h
+bicgstab	[Bb][Ii][Cc][Gg][-_ ]?[Ss][Tt][Aa][Bb]	mk_sparse.h mk_bicgstab	mathkit/include/mk_sparse.h
+gauss_legendre	[Gg]auss.?[Ll]egendre|1 */ *sqrt\(3(\.0)?\)|0\.9061798459|0\.8611363115	mk_quad.h mk_gauss_legendre	experiment/fea/fable/elem.c
+kronrod	0\.99145537|[Kk]ronrod	mk_quad.h mk_quad_adapt	engine/build/v12/full/engine/ref/chem/trans.c
+tet_rule	0\.5854101966|0\.1381966011	mk_quad.h mk_tet_rule	research/body-claude/src/bfe.c experiment/fea/fable/elem.c
+tri_rule	\{1\.0 */ *6, 1\.0 */ *6\}, \{2\.0 */ *3	mk_quad.h mk_tri_rule	research/body-claude/src/bfe.c
+lbfgs	[Ll]-?BFGS|lbfgs|two-loop	mk_opt.h mk_lbfgs	research/body-motion-support/src/skin-buckling/minimize.c
+cmaes	CMA-ES|cma_?es|\bmueff\b	mk_opt.h mk_cmaes	research/glance-core/walk/gaittrain.c
+stiff_ode	ode23s|[Rr]osenbrock (method|W)|\bBDF[12]?\b|[Bb]ackward Euler	mk_ode.h mk_ode23s mk_bdf_step	mcphys/damper/damper.c
+window	0\.5 *- *0\.5 *\* *cos|0\.54 *- *0\.46|0\.35875|0\.48829|[Hh]ann window|[Kk]aiser	mk_spec.h mk_window	mcphys/sound2/master/trackstat.c
+psd	[Ww]elch|\bpsd\b|periodogram|power spectral	mk_spec.h mk_welch	mcphys/sound2/master/trackstat.c
+coherence	[Cc]oherence|cross.spectr	mk_spec.h mk_csd mk_coherence	mathkit/include/mk_spec.h
+closest_pt_tri	Ericson|d1 \* d4 - d3 \* d2	mk_geom.h mk_closest_pt_tri	research/body-claude/src/bfe.c stepcad/tools/cfdsurf.c
+ray_tri	[Mm][oö]ller|Trumbore|\bpvec\b|watertight|ray_tri	mk_geom.h mk_ray_tri	hair/hairpt.c
+bvh	\b[Bb][Vv][Hh]\b|bounding.volume	mk_geom.h mk_bvh_*	scratch/body-claude/bodyfit/bvh.inc research/body-claude/src/bfe.c hair/hairpt.c
+point_in_mesh	ray parity|parity along	mk_geom.h mk_bvh_inside	research/body-claude/src/sdfgrid.c
+winding	[Ww]inding number|solid angle	mk_geom.h mk_winding_number	gauge/meshtop/meshtop.c stepcad/tools/cfdsurf.c
+tridiag	[Tt]homas (algorithm|solve)|; Thomas|[Tt]ri-?diagonal|-= f \* [a-z]+\[i - 1\], [a-z]+\[i\] -= f \*|cp\[i\] = [a-z]+ / den	mk_linalg.h mk_tridiag	metal/world.c metal/roadline.c research/body-claude/src/anatomy.c
+snet	[Ss]urface nets?\b|[Dd]ual contouring|[Cc]onstrained elastic surface	mk_snet.h mk_snet_build mk_snet_build_iso	research/body-claude/src/mesh.c experiment/cfd/wrap.c experiment/cfd/skin.c experiment/cfd/fv/fvskin.c
+vpflow	[Dd]ivergence-free (deformation|flow|map|field)|curl of a (vector )?potential|u = curl A|volume-(exact|preserving) (deformation|map|flow)	mk_vpflow.h mk_vp_advect	a data disk/the development machine/scratch/body-claude/s2fix/A/hand-off-7/tools/fmap-v22.c
+mesh_sdf	[Ss]igned distance grid|SDFGen|[Rr]ay parity|parity of (the )?crossings|mesh_sdf|distance field of a triangle	mk_sdf.h mk_sdf_mesh	research/body-claude/src/sdfgrid.c grown/stage/bone/dev/meshsdf.c experiment/cfd/levelset.h metal/ref/hair/hairgen.c
+sepvol	[Cc]rossing (triangle |face )?pairs|sunk into each other|sinks? into each other|[Ss]elf-crossing|crosses itself|selfsep|sepvol	mk_sepvol.h mk_sepvol	a data disk/the development machine/scratch/body-claude/airway/method/fix/sepvol.c research/body-claude/src/selfsep.c
+decimate	[Gg]arland|half-edge collapses?|edge collapses?|objdec|folddec|skindec|quadric error	mk_dec.h mk_decimate	scratch/mesher-fable/src/folddec.c scratch/mesher-body/skel7/src/objdec.c experiment/cfd/remesh.c research/body-claude/src/skindec.c
+mtet	marching tetrahedr|Freudenthal	mk_graft.h mk_mtet mk_graft_patch	scratch/mesher-fable/src/bonegraft.c scratch/body-claude/seat62b/seatcov.c scratch/body-claude/seat62a/thighvox.c
+overlap_volume	[Oo]verlap volume|share[sd]? volume|voldiff|column overlap|overlap_ml|volume (two|both) .*share	mk_ovl.h mk_overlap_volume mk_ovl_bvh	scratch/mesher-fable/src/ovl.c stepcad/tools/voldiff.c
+hhd	[Hh]elmholtz.?[Hh]odge|[Hh]odge decomposition	mk_hhd.h mk_hhd_split	mathkit/include/mk_hhd.h
+fft_any_length	[Mm]ixed.?radix|[Ss]tockham	mk_fft.h mk_fftm_c	mathkit/include/mk_fft.h
