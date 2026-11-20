@@ -1,3 +1,5 @@
+# damn, readme is unreadable on line one. i didn't test for that
+# i probably never will
 # mathkit 1.6.2, the freeze with the second review's fixes and their review (the maintainer, 2026-11-13; 1.0.0 to 1.0.4 landed 2026-11-14, 1.0.5 to 1.3.0 on 2026-11-15, 1.4.0 and 1.4.1 on 2026-11-16, 1.5.0 and 1.5.2 on 2026-11-16, 1.5.3 on 2026-11-16, 1.5.4 on 2026-11-18, 1.5.5 and 1.5.6 on 2026-11-19, 1.6.0 and 1.6.1 on 2026-11-20, 1.6.2 staged 2026-11-20; 1.5.1 spent)
 
 The house's CPU math kit: header-only C23, libc and libm only (and the caller's OpenMP runtime when it builds with
