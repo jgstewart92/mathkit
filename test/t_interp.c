@@ -127,7 +127,7 @@ int main(void)
         int nl = (1 << 30) + 4;
         size_t bytes = sizeof(double) * (size_t)nl;
         double *xl = mmap(0, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        if (xl == MAP_FAILED) CHECK(0, "mmap of an 8 GiB table (MAP_NORESERVE) failed: the locate row cannot run");
+        if (xl == MAP_FAILED) SKIP("locate in a table of 2^30 + 4: the 8 GiB mapping (MAP_NORESERVE) was refused");
         else {
             xl[nl - 1] = nl - 1, xl[nl - 2] = nl - 2; /* the rest read 0: the bisection climbs to the top */
             double tl;

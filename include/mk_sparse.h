@@ -16,6 +16,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+_Static_assert(sizeof(long) == 8, "mk_sparse.h needs LP64: it counts block entries in a long");
 
 typedef struct {
     int n;

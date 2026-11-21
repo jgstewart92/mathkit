@@ -42,7 +42,7 @@ int main(void)
     double ie = vd(mk_q_rotate(q, mk_v3_make(1, 2, 3)), mk_q_rotate(e, mk_v3_make(1, 2, 3)));
     CHECK(ie < 1e-12, "1000 steps at constant omega equal one turn of omega t (error %.2g)", ie);
     CHECK(mk_v3_len(mk_v3_norm(mk_v3_make(0, 0, 0))) == 0, "the unit vector of zero is zero, not NaN");
-    CHECK(strcmp(MK_VERSION, "1.6.2") == 0, "mathkit version %s", MK_VERSION);
+    CHECK(strcmp(MK_VERSION, "1.6.4") == 0 && MK_VERSION_MAJOR == 1 && MK_VERSION_MINOR == 6 && MK_VERSION_PATCH == 4, "mathkit version %s", MK_VERSION);
     { /* a zero axis gives the identity */
         mk_quat z = mk_q_axis_angle(mk_v3_make(0, 0, 0), 1);
         CHECK(z.w == 1 && z.x == 0 && z.y == 0 && z.z == 0, "a zero axis gives the identity (got %g, %g, %g, %g)", z.w, z.x, z.y, z.z);

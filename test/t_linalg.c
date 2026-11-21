@@ -18,16 +18,19 @@ static double resid(const double *A, int n, const double *x, const double *b)
     return r;
 }
 
-/* a least-squares case from test/data: "op m n", then A row-major and b, as hex floats */
+enum { LS_MAXN = 64 }; /* the most columns a case may have (ls_case's x) */
+/* a least-squares case from test/data: "op m n", then A row-major and b, as hex floats. -1, with nothing left
+   allocated, for a size outside 1 <= n <= LS_MAXN, 1 <= m <= 2^20, or a short file */
 static int load_ls(const char *path, int *m, int *n, double **A, double **b)
 {
     FILE *f = fopen(path, "r");
-    int op;
-    if (!f || fscanf(f, "%d %d %d", &op, m, n) != 3) { if (f) fclose(f); return -1; }
-    *A = malloc(sizeof(double) * (size_t)(*m * *n)), *b = malloc(sizeof(double) * (size_t)*m);
-    for (int i = 0; i < *m * *n; i++) if (fscanf(f, "%la", &(*A)[i]) != 1) { fclose(f); return -1; }
-    for (int i = 0; i < *m; i++) if (fscanf(f, "%la", &(*b)[i]) != 1) { fclose(f); return -1; }
-    fclose(f);
+    int op, ok = f && fscanf(f, "%d %d %d", &op, m, n) == 3 && *m >= 1 && *m <= 1 << 20 && *n >= 1 && *n <= LS_MAXN;
+    *A = ok ? malloc(sizeof(double) * (size_t)*m * (size_t)*n) : NULL, *b = ok ? malloc(sizeof(double) * (size_t)*m) : NULL;
+    ok = ok && *A && *b;
+    for (int i = 0; ok && i < *m * *n; i++) ok = fscanf(f, "%la", &(*A)[i]) == 1;
+    for (int i = 0; ok && i < *m; i++) ok = fscanf(f, "%la", &(*b)[i]) == 1;
+    if (f) fclose(f);
+    if (!ok) { free(*A), free(*b); return -1; }
     return 0;
 }
 /* mk_lstsq on a file's problem: the returned residual against x's own (long double), and the largest |x| */
@@ -37,7 +40,7 @@ static void ls_case(const char *path, double *ret, double *own, double *xmax)
     double *A, *b;
     *ret = *own = *xmax = NAN;
     if (load_ls(path, &m, &n, &A, &b)) return;
-    double *a2 = malloc(sizeof(double) * (size_t)(m * n)), *b2 = malloc(sizeof(double) * (size_t)m), x[64];
+    double *a2 = malloc(sizeof(double) * (size_t)(m * n)), *b2 = malloc(sizeof(double) * (size_t)m), x[LS_MAXN];
     memcpy(a2, A, sizeof(double) * (size_t)(m * n)), memcpy(b2, b, sizeof(double) * (size_t)m);
     *ret = mk_lstsq(a2, m, n, b2, x);
     long double r = 0;

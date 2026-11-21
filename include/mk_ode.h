@@ -157,12 +157,13 @@ typedef struct {
    Chosen over ROS3P because L-stability damps the fastest modes completely (ROS3P's stability function tends to 0.73 at
    infinity, so very stiff transients ring), which is what Robertson's kinetics and a relaxation oscillator need; ROS3P
    (Lang and Verwer 2001) is the better pick for semi-discretized parabolic PDEs at tight tolerance. jac may be NULL
-   (forward differences). Integrates forward from t0 to t1 >= t0; *h the first step to try (0 picks one) and, after, the
-   last. Steps as mk_dopri's: the size t can take, smaller after a rejection, a NaN step refused. 0; -1 if the step
-   underflowed, maxsteps ran out, n is outside 0..46340, t0 or t1 is not finite, or t1 < t0; -2 no memory. The floor is
-   1e-14 of the span, so a fast start on a long span needs a call of its own (Robertson's from 0 to 1e11 in one call is
-   -1; 0 to 1, then 1 to 1e11, matches Hairer and Wanner 1996); W's LU refuses a pivot under 1e-13 of W's largest entry,
-   which on Robertson's turns away steps past about 1e10. */
+   (forward differences). Integrates forward from t0 to t1 >= t0; *h the first step to try (0, or anything but a finite
+   positive step, picks one, as in mk_dopri) and, after, the last. Steps as mk_dopri's: the size t can take, smaller
+   after a rejection, a NaN step refused. 0; -1 if the step underflowed, maxsteps ran out, n is outside 0..46340, t0 or
+   t1 is not finite, or t1 < t0; -2 no memory. The floor is 1e-14 of the span, so a fast start on a long span needs a
+   call of its own (Robertson's from 0 to 1e11 in one call is -1; 0 to 1, then 1 to 1e11, matches Hairer and Wanner
+   1996); W's LU refuses a pivot under 1e-13 of W's largest entry, which on Robertson's turns away steps past about
+   1e10. */
 static inline int mk_ode23s(mk_odefn f, mk_odejac jac, void *ctx, int n, double t0, double *y, double t1, double *h, mk_stiff_ctl *c)
 {
     const double d = 1 / (2 + sqrt(2.0)), e32 = 6 + sqrt(2.0);
@@ -175,7 +176,7 @@ static inline int mk_ode23s(mk_odefn f, mk_odejac jac, void *ctx, int n, double 
     double *J = mem, *W = J + nn, *F0 = W + nn, *F1 = F0 + n, *F2 = F1 + n, *T = F2 + n, *k1 = T + n, *k2 = k1 + n, *k3 = k2 + n;
     double *yn = k3 + n, *z = yn + n, *tmp = z + n, *ys = tmp + n;
     /* the first guess as mk_dopri's */
-    double t = t0, span = t1 - t0, hh = *h > 0 ? *h : fmax(span * 1e-6, 16 * (nextafter(fabs(t0), INFINITY) - fabs(t0)));
+    double t = t0, span = t1 - t0, hh = *h > 0 && isfinite(*h) ? *h : fmax(span * 1e-6, 16 * (nextafter(fabs(t0), INFINITY) - fabs(t0)));
     int ret = 0, needj = 1;
     if (span <= 0) { free(mem), free(piv); return 0; }
     f(t, y, F0, ctx), c->evals++;

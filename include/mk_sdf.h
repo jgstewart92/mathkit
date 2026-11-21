@@ -38,6 +38,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+_Static_assert(sizeof(long) == 8, "mk_sdf.h needs LP64: it counts grid nodes in a long");
 
 enum { MK_SDF_FILL = 1, MK_SDF_EXACT = 2, MK_SDF_LATTICE = 4 };
 typedef struct {

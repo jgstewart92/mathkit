@@ -1,12 +1,13 @@
 # What check.sh counts as passed and as caught. Sourced by check.sh and by test/drvctl.sh, which shows each verdict on a
-# known-bad input. Needs B, CC, CFLAGS; adds to wrong.
-#   The real header passes when its test runs to its end with at least one PASS row and no FAIL row.
+# known-bad input. Needs B, CC, CFLAGS; adds to wrong and skipped.
+#   The real header passes when its test runs to its end with at least one PASS row and no FAIL row. Its SKIP rows (rows
+#   that could not run here) are printed and added to skipped: never a pass, never a fault.
 #   A planted fault is caught by a FAIL row. A timeout is never a catch, nor is a crash or a bare nonzero exit, with one
 #   exception: a fault meant to be caught by a crash is named in CRASHES as fault:signal, and only that signal counts.
 #   Exit 124 or 137 is read as a timeout even when it is the FAIL count (124 or 137 rows: a loud WRONG, never a pass;
 #   the largest test prints far fewer rows).
 LIMIT=${LIMIT:-120} # seconds a test may run
-wrong=${wrong:-0}
+wrong=${wrong:-0} skipped=${skipped:-0}
 say_() { printf '%-20s %-28s %s\n' "$1" "$2" "$3"; }
 bad_() { say_ "$1" "$2" "WRONG ($3)"; wrong=$((wrong + 1)); }
 # nothing an earlier run left behind may count for this one
@@ -15,7 +16,7 @@ fresh() { rm -f "$1" "$1.out" "$1.err"; }
 # count, timeout, signal:N, exit:N). A test returns its FAIL count, which wraps at 256.
 runexe() {
 	timeout -k 5 "$LIMIT" "$1" > "$1.out" 2>&1; r=$?
-	fails=$(grep -c '^FAIL' "$1.out"); passes=$(grep -c '^PASS' "$1.out")
+	fails=$(grep -c '^FAIL' "$1.out"); passes=$(grep -c '^PASS' "$1.out"); skips=$(grep -c '^SKIP' "$1.out")
 	if [ "$r" -eq 0 ]; then ended=ok
 	elif [ "$r" -eq 124 ] || [ "$r" -eq 137 ]; then ended=timeout # before rows: 124 FAIL rows and a hang time out
 	elif [ $((fails % 256)) -eq "$r" ]; then ended=rows
@@ -25,8 +26,10 @@ runexe() {
 # the verdict on the run just made: name, mutant (0 = the real header)
 judge() {
 	if [ "$2" = 0 ]; then
-		if [ "$ended" = ok ] && [ "$fails" -eq 0 ] && [ "$passes" -gt 0 ]; then say_ "$1" "real header" "PASS ($passes rows)"
-		else bad_ "$1" "real header" "$ended, $fails rows fail, $passes pass"; grep '^FAIL' "$exe.out"; fi
+		sk=""; [ "$skips" -gt 0 ] && sk=", $skips skipped"
+		if [ "$ended" = ok ] && [ "$fails" -eq 0 ] && [ "$passes" -gt 0 ]; then say_ "$1" "real header" "PASS ($passes rows$sk)"
+		else bad_ "$1" "real header" "$ended, $fails rows fail, $passes pass$sk"; grep '^FAIL' "$exe.out"; fi
+		grep '^SKIP' "$exe.out"; skipped=$((skipped + skips))
 	elif [ "$ended" = timeout ]; then bad_ "$1" "planted fault $2" "timeout after $LIMIT s: not a catch"
 	elif [ "$fails" -gt 0 ]; then say_ "$1" "planted fault $2" "PASS (caught by $fails rows)"
 	else

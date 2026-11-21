@@ -38,16 +38,7 @@ int main(void)
     { /* an open mesh (a face less): its lines through the hole are left out and counted */
         tm_mesh O = {0};
         tm_sphere(&O, R, c1, 5);
-        int best = 0;
-        double bd = INFINITY;
-        for (int t = 0; t < O.nt; t++) { /* a face of B inside A, facing up as much as along x */
-            double g[3] = {0, 0, 0}, dd = 0;
-            for (int k = 0; k < 3; k++) g[k] = (O.V[3 * O.T[3 * t] + k] + O.V[3 * O.T[3 * t + 1] + k] + O.V[3 * O.T[3 * t + 2] + k]) / 3;
-            dd = (g[0] - 0.4) * (g[0] - 0.4) + g[1] * g[1] + (g[2] - 0.6) * (g[2] - 0.6);
-            if (dd < bd) bd = dd, best = t;
-        }
-        (void)best;
-        for (int t = 0; t < O.nt; t++) { /* every face within 0.08 of that point */
+        for (int t = 0; t < O.nt; t++) { /* cut out the faces whose centre is within 0.08 of (0.4, 0, 0.6), inside A */
             double g[3];
             for (int k = 0; k < 3; k++) g[k] = (O.V[3 * O.T[3 * t] + k] + O.V[3 * O.T[3 * t + 1] + k] + O.V[3 * O.T[3 * t + 2] + k]) / 3;
             if ((g[0] - 0.4) * (g[0] - 0.4) + g[1] * g[1] + (g[2] - 0.6) * (g[2] - 0.6) < 0.0064) memcpy(O.T + 3 * t, O.T + 3 * (O.nt - 1), 3 * sizeof *O.T), O.nt--, t--;

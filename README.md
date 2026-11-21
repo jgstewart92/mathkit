@@ -4,7 +4,7 @@ mathkit is a header-only C23 kit of numerical and geometric methods: small dense
 solvers, FFTs and spectral analysis, quadrature, ODE steppers, optimizers, statistics, interpolation, random numbers,
 and triangle-mesh geometry (BVH queries, signed distance grids, surface nets). It needs only libc and libm. Built with
 `-fopenmp`, its hot loops run on OpenMP threads; without it they run serially and give the same results. This is
-version 1.6.2 (`MK_VERSION` in `include/mk_version.h`).
+version 1.6.4 (`MK_VERSION` in `include/mk_version.h`).
 
 ## Using it
 
@@ -27,7 +27,7 @@ int r = mk_cg(&A, b, x, MK_PC_IC0, 1e-10, 1000, &iters, &relres); /* x: first gu
 mk_csr_free(&A);                                                   /* r: 0 converged, 1 not within maxit, -1 failed */
 ```
 
-- `-std=c23`: the headers are C23.
+- `-std=c23`: the headers are C23; they also compile as C11 and C17 (the tests check C11).
 - `-ffp-contract=off` is required. It stops the compiler from fusing `a * b + c` into one FMA, which changes rounding
   with the target and the optimization level. The kit's results are meant to be reproducible (the same at any thread
   count, with or without OpenMP), and the tests compare many of them bit for bit. Where the kit wants an FMA it calls
@@ -35,13 +35,14 @@ mk_csr_free(&A);                                                   /* r: 0 conve
   where they go through libm functions such as `sin`, `cos` and `exp`.
 - Don't build with `-ffast-math`: it lets the compiler drop the NaN and infinity checks and reorder the compensated
   sums.
-- LP64 only (64-bit `long` and pointers). The size checks rely on it; nothing checks it at compile time.
+- LP64 only (64-bit `long` and pointers). The size checks rely on it: mk_linalg.h, mk_sparse.h, mk_geom.h, mk_sdf.h
+  and mk_hhd.h, and the headers that include them, stop the build elsewhere with a `static_assert`.
 - Each header compiles alone without warnings at `-Wall -Wextra -Wpedantic -Werror`, with and without `-fopenmp`.
 
 ## Testing
 
 ```sh
-make check          # one row per check, then "wrong: N"; exits with N (at most 100)
+make check          # one row per check, then "wrong: N, skipped: M"; exits with N (at most 100)
 make check OMP=1    # the same, with every test and planted fault also built with -fopenmp
 make bench          # CG on a 64^3 Laplacian (OMP=1: threaded); BVH query rates against brute force
 ```
@@ -52,7 +53,8 @@ make bench          # CG on a 64^3 Laplacian (OMP=1: threaded); BVH query rates 
 
 - each header compiles alone, with and without `-fopenmp`;
 - each test `test/t_*.c` passes on the real headers: it exits 0 with at least one PASS row and no FAIL row, within
-  `LIMIT` seconds (default 120);
+  `LIMIT` seconds (default 120). A SKIP row, one that cannot run on this machine, is printed and counted in
+  `skipped`, never as a pass;
 - every planted fault is caught. The headers hold 140 test-only faults, each under `MK_MUTATE == N`. check.sh builds
   the fault's test with `-DMK_MUTATE=N`, and the test must print a FAIL row; a timeout, a crash or a bare nonzero exit
   is not a catch (the rules are in `test/judge.sh`). Never define `MK_MUTATE` outside the tests;
@@ -61,12 +63,18 @@ make bench          # CG on a 64^3 Laplacian (OMP=1: threaded); BVH query rates 
 - the checks discriminate: `test/negctl.sh` shows each thread row that no planted fault reaches failing on a known-bad
   input, and `test/drvctl.sh` shows each of judge.sh's verdicts on a known-bad program.
 
-The mesh rows in check.sh use an external closed-mesh checker, `meshcheck`, which is not part of this repository. Set
-`MESHCHECK` to its path: check.sh tests that path with `-x` and does not search `PATH`. Without it the three meshcheck
-groups (surface nets; mk_sepvol; mk_decimate and mk_graft) each report WRONG, so an otherwise clean run ends with
-`wrong: 3`. check.sh runs `$MESHCHECK -t FILE.obj` on the OBJ files that t_snet, t_sepvol, t_dec and t_graft write, and
-reads the second line as tab-separated fields: the Euler characteristic in field 8, the genus in field 9, the signed
-volume in field 19 (positive for an outward mesh), and `clean` or `FAULT` in the last field.
+The mesh rows in check.sh use an external closed-mesh checker, `meshcheck`, which is not part of this repository.
+check.sh runs `$MESHCHECK` when it is set (`make check MESHCHECK=path`), else `meshcheck` on `PATH`. With neither,
+each of the 24 mesh rows prints SKIP, so an otherwise clean run ends with `wrong: 0, skipped: 24` (or more); a
+`MESHCHECK` that is not an executable is WRONG. check.sh runs `$MESHCHECK -t FILE.obj` on the OBJ files that t_snet,
+t_sepvol, t_dec and t_graft write, and reads the second line as tab-separated fields: the Euler characteristic in field
+8, the genus in field 9, the signed volume in field 19 (positive for an outward mesh), and `clean` or `FAULT` in the
+last field.
+
+Two more rows skip when what they need is missing: t_rng's bit-for-bit comparison with an independent xoshiro256**
+header (`make check RIBBON_RNG_H=path/ribbon_rng.h`, a header that defines `RbRng`, `rb_seed` and `rb_next`), and
+t_interp's search of a 2^30-node table, whose 8 GiB `MAP_NORESERVE` mapping is refused under strict overcommit or an
+address-space limit.
 
 ## Threads and determinism
 
@@ -187,7 +195,8 @@ return values.
   (two stored cases in test/data), a 6 x 6 symmetric matrix with known values, 3x3 paths, the tridiagonal solve's
   backward error on random systems, refusals.
 - t_rng: xoshiro256** against its authors' reference output, uniform ranges, Gaussian moments, chi-squared of
-  `mk_rng_below`, the sum 1 + 1e100 + 1 - 1e100 = 2.
+  `mk_rng_below`, the sum 1 + 1e100 + 1 - 1e100 = 2; with `RIBBON_RNG_H`, seeded streams against an independent
+  implementation bit for bit.
 - t_stats: known medians, random arrays with ties against sorting, quantiles of 1..10, Welford against a direct sum,
   at an offset of 1e9, and merged.
 - t_interp: PCHIP bit for bit against a reference implementation written out in the test (22000 queries),
@@ -196,7 +205,7 @@ return values.
   ellipsoid of condition 1e6, Rastrigin with restarts, and Brown-Dennis and Penalty I at their published minima.
 - t_ode: RK4's order 4, Dormand-Prince against its tolerance and backward, Verlet's order 2 and bounded energy,
   Robertson's kinetics against Hairer and Wanner's reference values, Van der Pol at mu 1000 against its asymptotic
-  period, BDF orders 1 and 2, refusals.
+  period, BDF orders 1 and 2, an infinite first step, refusals.
 - t_sparse: a Laplacian against a known solution, CG within its sqrt(kappa) iteration bound, IC(0) and block-Jacobi
   against a dense LU, a singular periodic Laplacian, BiCGSTAB on upwind convection-diffusion, b scaled by 2^600 giving x
   scaled bit for bit, extreme scales, size refusals.
@@ -279,3 +288,15 @@ with a finite value after the NaN, or `mk_decimate`'s mark wrap.
 - mk_dec.h: Garland and Heckbert 1997, "Surface simplification using quadric error metrics". Dey, Edelsbrunner, Guha
   and Nekhayev 1999, "Topology preserving edge contraction" (the link condition).
 - mk_graft.h: Freudenthal 1942, "Simplizialzerlegungen von beschränkter Flachheit" (six tetrahedra a cube).
+
+## Changes
+
+1.6.4:
+- The 64-bit `long` checks are spelled `_Static_assert`, so the headers compile as C11 again.
+
+1.6.3:
+- `mk_ode23s` chooses its own first step when `*h` is infinite, as `mk_dopri` does.
+- The headers whose sizes and counts need a 64-bit `long` (mk_linalg, mk_sparse, mk_geom, mk_sdf, mk_hhd) refuse other
+  targets at compile time.
+- `make check` runs without meshcheck or an RNG header: those rows print SKIP, and the run ends `wrong: N, skipped: M`.
+- t_ode reports the absolute error of y' = -2ty.

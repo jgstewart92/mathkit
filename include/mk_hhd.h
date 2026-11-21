@@ -60,6 +60,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+_Static_assert(sizeof(long) == 8, "mk_hhd.h needs LP64: its grid size check multiplies in a long");
 
 /* lanes: buffers fixed by count, not by thread; columns per transform block */
 enum { MK_HHD_LANES_ = 16, MK_HHD_COLS_ = 8 };

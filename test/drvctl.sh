@@ -40,6 +40,10 @@ prog 'puts("PASS  a row"); return 86;' "$good"
 try 0; say "the real header, exit 86" "WRONG (exit:86" "$W/out" "real header, exit 86"
 prog "$good" "$good"
 try 0; say "the real header, one PASS row" "PASS (1 rows" "$W/out" "real header, clean"
+prog 'puts("PASS  a row"); puts("SKIP  a row"); return 0;' "$good"
+try 0; say "the real header, a PASS and a SKIP row" "PASS (1 rows, 1 skipped" "$W/out" "real header, a skip"
+prog 'puts("SKIP  a row"); return 0;' "$good"
+try 0; say "the real header, only a SKIP row" "WRONG (ok, 0 rows fail, 0 pass, 1 skipped" "$W/out" "real header, skips only"
 
 # t_par's comparison of the builds, with the outputs of an earlier good run left in build/
 par() { # the program without OpenMP, the BITS lines wanted

@@ -1,6 +1,11 @@
 /* mk_rng.h: xoshiro256** against its authors' outputs, the moments of the Gaussian and uniform draws, a chi-squared
-   test of mk_rng_below, and the compensated sum mk_sum. */
+   test of mk_rng_below, and the compensated sum mk_sum. Built with -DMK_RIBBON_RNG_H='"path/ribbon_rng.h"', it also
+   compares seeded streams bit for bit with an independent implementation of the same generator (RbRng, rb_seed,
+   rb_next); without it that row prints SKIP. */
 #include "../include/mk_rng.h"
+#ifdef MK_RIBBON_RNG_H
+#include MK_RIBBON_RNG_H
+#endif
 #include "t.h"
 
 int main(void)
@@ -14,6 +19,15 @@ int main(void)
           "xoshiro256** from {1,2,3,4}: 11520, 0, 1509978240, 1215971899390074240 (got %llu %llu %llu %llu)",
           (unsigned long long)got[0], (unsigned long long)got[1], (unsigned long long)got[2], (unsigned long long)got[3]);
     mk_rng a;
+#ifdef MK_RIBBON_RNG_H
+    RbRng b;
+    mk_rng_seed(&a, 12345, 7), rb_seed(&b, 12345, 7);
+    int same = 1;
+    for (int i = 0; i < 100000; i++) same &= mk_rng_next(&a) == rb_next(&b);
+    CHECK(same, "seeded (12345, stream 7): 100000 draws equal ribbon_rng.h's bit for bit");
+#else
+    SKIP("seeded (12345, stream 7): the bit-for-bit comparison with ribbon_rng.h (build with -DMK_RIBBON_RNG_H)");
+#endif
 
     mk_rng_seed(&a, 1, 0);
     enum { N = 1000000 };

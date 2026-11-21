@@ -17,6 +17,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+_Static_assert(sizeof(long) == 8, "mk_geom.h needs LP64: it counts triangle pairs in a long");
 
 /* Edge fallback for mk_closest_pt_tri on a sliver, a repeated corner, or a weight below 0 or NaN: each edge's closest
    point replaces q when nearer (in exact arithmetic it never is; after rounding it may be). A q with a negative or NaN
@@ -185,7 +186,7 @@ static inline void mk_tri_box_(const double *V, const int *T, int t, mk_aabb *b)
     for (int j = 0; j < 3; j++) mk_aabb_add(b, V + 3 * (size_t)T[3 * (size_t)t + j]);
 }
 #define MK_BVH_SAH_DEPTH 200
-static inline int mk_bvh_split_(mk_bvh *B, const double *cen, int node, int first, int count, int depth)
+static inline void mk_bvh_split_(mk_bvh *B, const double *cen, int node, int first, int count, int depth)
 {
     enum { NB = 16, LEAF = 4 };
     mk_bvh_node *nd = &B->node[node];
@@ -197,7 +198,7 @@ static inline int mk_bvh_split_(mk_bvh *B, const double *cen, int node, int firs
         mk_tri_box_(B->V, B->T, B->tri[i], &tb), mk_aabb_join(&nd->box, &tb), mk_aabb_add(&cb, cen + 3 * (size_t)B->tri[i]);
     }
     nd->first = first, nd->count = count;
-    if (count <= LEAF) return 0;
+    if (count <= LEAF) return;
     int ax = 0;
     for (int k = 1; k < 3; k++) if (cb.hi[k] - cb.lo[k] > cb.hi[ax] - cb.lo[ax]) ax = k;
     double ext = cb.hi[ax] - cb.lo[ax];
@@ -228,7 +229,7 @@ static inline int mk_bvh_split_(mk_bvh *B, const double *cen, int node, int firs
         }
         if (bs < 0) ext = 0;
         else {
-            if (best >= count * mk_aabb_area(&nd->box) && count <= 16) return 0; /* a split costs more than a leaf */
+            if (best >= count * mk_aabb_area(&nd->box) && count <= 16) return; /* a split costs more than a leaf */
             int i = first, j = first + count - 1;
             while (i <= j) {
                 int t = B->tri[i];
@@ -245,8 +246,8 @@ static inline int mk_bvh_split_(mk_bvh *B, const double *cen, int node, int firs
     B->nnode += 2;
     nd = &B->node[node];
     nd->first = c, nd->count = 0;
-    if (mk_bvh_split_(B, cen, c, first, mid - first, depth + 1)) return -1;
-    return mk_bvh_split_(B, cen, c + 1, mid, first + count - mid, depth + 1);
+    mk_bvh_split_(B, cen, c, first, mid - first, depth + 1);
+    mk_bvh_split_(B, cen, c + 1, mid, first + count - mid, depth + 1);
 }
 static inline void mk_bvh_free(mk_bvh *B)
 {
@@ -268,10 +269,13 @@ static inline int mk_bvh_build(mk_bvh *B, const double *V, const int *T, int nt)
         for (int k = 0; k < 3; k++)
             cen[3 * (size_t)t + k] = (V[3 * (size_t)T[3 * (size_t)t] + k] + V[3 * (size_t)T[3 * (size_t)t + 1] + k] + V[3 * (size_t)T[3 * (size_t)t + 2] + k]) / 3;
     }
-    int r = nt ? mk_bvh_split_(B, cen, 0, 0, nt, 0) : (mk_aabb_empty(&B->node[0].box), B->node[0].first = 0, B->node[0].count = 0, 0);
+    if (nt) mk_bvh_split_(B, cen, 0, 0, nt, 0);
+    else mk_aabb_empty(&B->node[0].box), B->node[0].first = 0, B->node[0].count = 0;
     free(cen);
-    return r;
+    return 0;
 }
+/* A traversal holds at most a node's depth + 2 entries. Past depth MK_BVH_SAH_DEPTH the build splits by count, so no
+   node is deeper than 200 + 28 for nt < 2^30: the stack never fills, and its guard never drops a child. */
 #define MK_BVH_STACK 256
 static inline const double *mk_bvh_v_(const mk_bvh *B, int t, int j) { return B->V + 3 * (size_t)B->T[3 * (size_t)t + j]; }
 

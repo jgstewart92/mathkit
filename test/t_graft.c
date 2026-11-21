@@ -175,7 +175,8 @@ int main(int argc, char **argv)
         mk_bvh B2;
         if (k2 && !mk_bvh_build(&B2, O2.V, O2.T, O2.nt)) x2 = mk_bvh_crossings(&B2, NULL), mk_bvh_free(&B2);
         if (k3 && !mk_bvh_build(&B2, O3.V, O3.T, O3.nt)) x3 = mk_bvh_crossings(&B2, NULL), mk_bvh_free(&B2);
-        CHECK(k2 && c2 == 2 && r2.pieces == 1 && r2.merged > 0 && fabs(r2.vol1 / vexp - 1) < 3e-3 && k3 && c3 == 2 && r3.pieces == 1 && r3.merged > 0 && fabs(r3.vol1 / v3 - 1) < 1e-2,
+        CHECK(k2 && c2 == 2 && r2.dup == 0 && r2.lone == 0 && r2.pieces == 1 && r2.merged > 0 && fabs(r2.vol1 / vexp - 1) < 3e-3 && k3 && c3 == 2 && r3.dup == 0 &&
+                  r3.lone == 0 && r3.pieces == 1 && r3.merged > 0 && fabs(r3.vol1 / v3 - 1) < 1e-2,
               "the patch not thinned (%d and %d triangles): closed, Euler %d and %d, rc %d and %d, dup %ld and %ld, lone %ld and %ld; %ld and %ld rim vertices out of order merged; volume %.3f %% and %.3f %% off; crossing pairs by the seam %ld and %ld (not judged: thinning lays them flat)",
               P.nt, P3.nt, c2, c3, s2, s3, r2.dup, r3.dup, r2.lone, r3.lone, r2.merged, r3.merged, 100 * (r2.vol1 / vexp - 1), 100 * (r3.vol1 / v3 - 1), x2, x3);
         { /* mk_graft_refine: the coarse S refined where the seam cuts it (edges to 2 h within 2 h of it), then grafted

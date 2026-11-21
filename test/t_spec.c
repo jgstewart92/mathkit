@@ -9,7 +9,6 @@ int main(void)
     CHECK(fabs(mk_bessel_i0(5) - 27.239871823604442) < 1e-12 && fabs(mk_bessel_i0(1) - 1.2660658777520082) < 1e-15,
           "I0(5) = %.15g, I0(1) = %.16g (27.239871823604442, 1.2660658777520082)", mk_bessel_i0(5), mk_bessel_i0(1));
     enum { NF = 256 };
-    const char *nm[5] = {"rectangular", "Hann", "Hamming", "Blackman-Harris", "Kaiser 8.6"};
     static double x[NF], p[NF / 2 + 1];
     mk_rng g;
     mk_rng_seed(&g, 5, 0);
@@ -37,7 +36,6 @@ int main(void)
     }
     CHECK(pbad == 0, "Parseval, one segment, every window: density summed over frequency = the windowed mean square (worst %.2g)", worst);
     CHECK(abad == 0, "power scaling: a sine's amplitude 3 recovered from its bin with every window, to 1e-5 (worst %.2g, Kaiser's leakage)", aw);
-    (void)nm;
 
     long n = 1L << 18;
     double *w = malloc(sizeof(double) * (size_t)n), *z = malloc(sizeof(double) * (size_t)n);

@@ -95,10 +95,10 @@ int main(void)
         double g = 1, hg = 0, wg[MK_DOPRI_WORK(1)];
         mk_dopri_ctl cg = {tols[k], tols[k] * 1e-3, 0, 0, 0, 0, 0};
         mk_dopri(gaussf, NULL, 1, 0, &g, 3, &hg, wg, &cg);
-        errs[k] = fabs(g - exp(-9.0)) / exp(-9.0) * exp(-9.0) + fabs(g - exp(-9.0));
+        errs[k] = fabs(g - exp(-9.0));
         steps[k] = cg.accepted;
     }
-    CHECK(errs[0] > errs[1] && errs[1] > errs[2] && errs[2] < 1e-11, "y' = -2 t y to t 3, tolerance 1e-5, 1e-8, 1e-11: errors %.2g %.2g %.2g, steps %ld %ld %ld",
+    CHECK(errs[0] > errs[1] && errs[1] > errs[2] && errs[2] < 1e-11, "y' = -2 t y to t 3, tolerance 1e-5, 1e-8, 1e-11: absolute errors %.2g %.2g %.2g, steps %ld %ld %ld",
           errs[0], errs[1], errs[2], steps[0], steps[1], steps[2]);
     double yb[2] = {cos(5.0), -sin(5.0)}, hb = 0;
     mk_dopri_ctl cb = {1e-10, 1e-12, 0, 0, 0, 0, 0};
@@ -121,6 +121,13 @@ int main(void)
     double re1 = fabs(ry[0] - ref[0]) / ref[0], re2 = fabs(ry[1] - ref[1]) / ref[1], re3 = fabs(ry[2] - ref[2]) / ref[2];
     CHECK(!rr && re1 < 1e-5 && re2 < 1e-4 && re3 < 1e-5 && fabs(ry[0] + ry[1] + ry[2] - 1) < 1e-13,
           "ode23s, Robertson to t 40: relative errors %.2g %.2g %.2g, mass %.2g off 1, %ld steps, %ld rejected", re1, re2, re3, ry[0] + ry[1] + ry[2] - 1, sc.accepted, sc.rejected);
+    { /* an infinite first step is not taken as a step: ode23s picks its own, as for 0 (and as mk_dopri does) */
+        double ya[3] = {1, 0, 0}, yi[3] = {1, 0, 0}, ha = 0, hi = INFINITY;
+        mk_stiff_ctl ca = {1e-7, 1e-12, 0, 1, 0, 0, 0, 0, 0, 200000}, ci = ca;
+        const int ra = mk_ode23s(rober, rober_j, NULL, 3, 0, ya, 40, &ha, &ca), ri = mk_ode23s(rober, rober_j, NULL, 3, 0, yi, 40, &hi, &ci);
+        CHECK(!ra && !ri && ca.accepted == ci.accepted && ca.rejected == ci.rejected && ya[0] == yi[0] && ya[1] == yi[1] && ya[2] == yi[2],
+              "ode23s, Robertson to t 40 from an infinite *h: %ld steps, %ld rejected, the same as from *h 0 (%ld, %ld)", ci.accepted, ci.rejected, ca.accepted, ca.rejected);
+    }
     double dy3[3] = {1, 0, 0}, dh = 0, dw[MK_DOPRI_WORK(3)];
     mk_dopri_ctl dc = {1e-7, 1e-12, 0, 0, 0, 0, 0};
     mk_dopri(rober, NULL, 3, 0, dy3, 40, &dh, dw, &dc);

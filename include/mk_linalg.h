@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <math.h>
 #include <string.h>
+_Static_assert(sizeof(long) == 8, "mk_linalg.h needs LP64: it counts m * n entries in a long");
 
 /* LU in place (L's unit diagonal not stored) with row pivots piv[n]. -1 when a pivot is below 1e-13 of the largest
    entry, or NaN, or n is outside 0..46340. */
