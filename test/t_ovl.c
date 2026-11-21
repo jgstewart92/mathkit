@@ -1,5 +1,6 @@
-/* mk_overlap_volume (mesher-fable's ovl, with stepcad's voldiff): two spheres' lens against its analytic volume, a sphere's own volume,
-   a box pair whose faces lie on the lattice (exact), the three axes, disjoint and nested pairs, an open mesh's odd lines, refusals. */
+/* mk_overlap_volume: two unit spheres' lens against its analytic volume, pi (4R + d)(2R - d)^2 / 12; a sphere's own
+   volume against the mesh's signed volume; two boxes whose faces lie on the line lattice, where the count is exact
+   (0.28125); the three line axes; disjoint and nested pairs; an open mesh's odd lines; the refusals. */
 #include "../include/mk_ovl.h"
 #include "t.h"
 #include "tmesh.h"
@@ -25,7 +26,7 @@ int main(void)
     e = mk_overlap_volume(A.V, A.nv, A.T, A.nt, S.V, S.nv, S.T, S.nt, h, 2, 0, &r);
     const double vs = tm_volume(S.V, S.T, S.nt);
     CHECK(e == 0 && fabs(r.both / vs - 1) < 5e-3, "a sphere inside another: %.5f, its volume %.5f", r.both, vs);
-    { /* boxes with faces on multiples of h: every line misses every edge, the count is exact */
+    { /* boxes with faces on multiples of h: every line misses every edge, so the overlap 0.5 x 0.75 x 0.75 is exact */
         tm_mesh P = {0}, Q = {0};
         const double lo0[3] = {0, 0, 0}, s0[3] = {1, 1, 1}, lo1[3] = {0.5, 0.25, 0.25}, s1[3] = {1, 1, 1};
         tm_box(&P, lo0, s0, 4), tm_box(&Q, lo1, s1, 4);

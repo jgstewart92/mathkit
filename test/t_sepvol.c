@@ -1,12 +1,14 @@
-/* mk_sepvol (cad-helper's sepvol, 2026-11-15, with body-claude's selfsep): two balls sunk into each other in one mesh
-   (single mode), a ball moved out of a held one, two cubes 1 mm into each other (the sharp edges sepvol's own-normal push
-   left crossing), a third part beside the crease, the volume change, the refusals. Whether a vertex is inside another part
-   is judged here by the winding number of that part alone, not by the header's ray parity. With a folder argument the
-   results are written there as OBJ files for test/check.sh to give to mesher's meshcheck. */
-[[maybe_unused]] static int t_pairs = 1; /* MK_SEPVOL_PAIRS is read at each call: row 12 turns step 2 off with it (a header before 1.5.2 ignores it) */
+/* mk_sepvol: two balls sunk into each other in one mesh (single mode), a ball moved out of a held one, two cubes 1 mm
+   into each other (sharp edges, where a push along the averaged vertex normal leaves faces crossing), a third part
+   beside the crease, crumpled and coarse meshes held against thin parts, held meshes that are refused, allocation
+   failures, the inside test's corner cases, the volume change, the refusals. Units are metres. Whether a vertex is
+   inside another part is judged here by the winding number of that part alone, and crossing pairs by this file's own
+   segment test, not by the header's. The meshes in test/data are read by paths relative to the repository root. With a
+   folder argument the results are written there as OBJ files, which test/check.sh checks with meshcheck. */
+[[maybe_unused]] static int t_pairs = 1; /* MK_SEPVOL_PAIRS is read at each call: row 12 turns step 2 off with it */
 #define MK_SEPVOL_PAIRS t_pairs
-/* row 13's allocation failures (the verification work's demo.c, test-only): the headers' allocations are counted, the one numbered t_fi_at
-   fails, and while one is set to fail each fresh block is filled with 0xA5, so a block read before it is written shows */
+/* row 13's allocation failures (test-only): the header's allocations are counted, the one numbered t_fi_at fails, and
+   while one is set to fail each fresh malloc block is filled with 0xA5, so a block read before it is written shows */
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -30,11 +32,6 @@ static void *t_fi_malloc(size_t n)
 #undef calloc
 #undef realloc
 #include "t.h"
-#ifdef MK_SEPVOL_SMOOTH
-#define MK_SEPVOL_SMOOTH_ MK_SEPVOL_SMOOTH
-#else
-#define MK_SEPVOL_SMOOTH_ 0 /* 1.4.0: no smoothing */
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -124,7 +121,7 @@ static long held_inside(const double *V, int nv, const mesh *H)
     for (int i = 0; i < nv; i++) n += mk_winding_number(H->V, H->T, H->nt, V + 3 * i) > 0.5;
     return n;
 }
-/* the largest outward share of a move: move . n0 / |move| over the moved vertices, n0 the vertex's area-weighted normal */
+/* the largest outward share of a move: move . n0 / |move| over the moved vertices, n0 the area-weighted normal */
 static double outward(const double *V0, const double *V, int nv, const int *T, int nt)
 {
     double *N = calloc((size_t)3 * nv, sizeof *N), w = -1;
@@ -142,7 +139,7 @@ static double outward(const double *V0, const double *V, int nv, const int *T, i
     free(N);
     return w;
 }
-/* a cube of side s at o split n x n a face, outward, welded within itself (cad-helper's cubes2.awk), appended to m */
+/* a cube of side s at o split n x n a face, outward, welded within itself, appended to m */
 static void cube(mesh *m, double ox, double oy, double oz, double s, int n)
 {
     const int base = m->nv, side = n + 1;
@@ -181,7 +178,7 @@ static void append(mesh *m, const mesh *a, const double *d)
     m->nv += a->nv, m->nt += a->nt;
 }
 
-/* an edge pq through triangle abc's interior: Moller-Trumbore, strict (meshcheck's test), the test's own, not the header's */
+/* an edge pq through triangle abc's interior: Moller-Trumbore, strict (meshcheck's test), not the header's */
 static int t_segtri(const double *p, const double *q, const double *a, const double *b, const double *c)
 {
     double d[3], e1[3], e2[3], s[3], h[3], g[3];
@@ -199,8 +196,8 @@ static int t_segtri(const double *p, const double *q, const double *a, const dou
     const double t = f * (e2[0] * g[0] + e2[1] * g[1] + e2[2] * g[2]);
     return t > 0 && t < 1;
 }
-/* a mesh's own crossing pairs (two faces sharing no corner, an edge of one through the other); with comp, only two faces of one
-   part. mk_geom's tree only finds the candidates. */
+/* a mesh's own crossing pairs (two faces sharing no corner, an edge of one through the other); with comp, only two
+   faces of one part. mk_geom's tree only finds the candidates. */
 static long own_pairs(const double *V, const int *T, int nt, const int *comp)
 {
     mk_bvh B;
@@ -243,8 +240,8 @@ static long pair_cross(const mesh *a, const mesh *b)
         }
     return n;
 }
-/* the crumpled cube: 10 mm, n x n a face, each face's inner vertices moved along its normal by up to amp at random (a height
-   field over each face, so it crosses nothing) */
+/* the crumpled cube: 10 mm, n x n a face, each face's inner vertices moved along its normal by up to amp at random (a
+   height field over each face, so it crosses nothing) */
 static mesh crumpled(int n, double amp)
 {
     mesh m = {0};
@@ -257,8 +254,8 @@ static mesh crumpled(int n, double amp)
     }
     return m;
 }
-/* a box bar th x len x wd (x, y, z), turned tilt about y, centred on the cube's +x face at y = z = 5 mm, its lowest corner
-   depth into it */
+/* a box bar th x len x wd (x, y, z), turned tilt about y, centred on the cube's +x face at y = z = 5 mm, its lowest
+   corner depth into it */
 static mesh barn(double th, double len, double wd, double tilt, double depth, int n) /* n x n a face */
 {
     mesh m = {0};
@@ -314,8 +311,8 @@ static void lat_sphere(mesh *m, int nu, int nw, const double *c)
     for (int j = 0; j < nu; j++, t += 3) t[0] = base + 1 + (nw - 2) * nu + j, t[1] = south, t[2] = base + 1 + (nw - 2) * nu + (j + 1) % nu;
     m->nt += nt;
 }
-/* vertices inside another part, each counted once, by the winding number of the other parts' faces alone (no ray of the header's);
-   *twice: those inside two others */
+/* vertices inside another part, each counted once, by the winding number of the other parts' faces alone (no ray of the
+   header's); *twice: those inside two others */
 static long others_inside(const double *V, int nv, const int *T, int nt, long *twice)
 {
     int *comp = malloc(sizeof *comp * nv), np = parts(T, nt, nv, comp), *TP = malloc(sizeof *TP * 3 * nt);
@@ -346,7 +343,7 @@ static void tetra(mesh *m, double scale, double cx, int inward)
     for (int t = 0; t < 4; t++, m->nt++)
         for (int k = 0; k < 3; k++) m->T[3 * m->nt + k] = base + f[3 * t + (inward ? 2 - k : k)];
 }
-/* the cube [-1, 1]^3, one square a face, each split along a diagonal drawn by the verification work's generator (H9's gm_cube; its seed g = 7) */
+/* the cube [-1, 1]^3, one square a face, each split along a diagonal drawn from the xorshift state *g */
 static void diag_cube(mesh *m, unsigned long long *g)
 {
     const int base = m->nv, n = 2;
@@ -400,7 +397,7 @@ static void writepair(const char *name, const mesh *a, const mesh *b)
 int main(int argc, char **argv)
 {
     odir = argc > 1 ? argv[1] : NULL;
-    const double gap = 5e-5, step = 2.5e-4; /* metres: 0.05 mm, 0.25 mm (cad-helper's step; the gap meshcheck's probe needs) */
+    const double gap = 5e-5, step = 2.5e-4; /* metres: 0.05 mm (the gap meshcheck's probe needs), 0.25 mm */
     const int rings = 3, rounds = 30;
     mk_sepvol_report r;
 
@@ -422,9 +419,7 @@ int main(int argc, char **argv)
     CHECK(r.worst <= rounds * step && r.worst > 0 && r.moved > 0, "twoball: %ld vertices moved, worst %.4f mm", r.moved, r.worst * 1e3);
     const double tbo = outward(tb0, tb.V, tb.nv, tb.T, tb.nt);
     CHECK(tbo < 0.01, "twoball: no move outward along a vertex's normal (largest share %.3f)", tbo);
-#ifdef MK_SEPVOL_HELD_OPEN
     CHECK(r.status == 0 && r.self0 == 0 && r.self1 == 0, "twoball: status %d; own crossing pairs within one ball %ld, %ld after (the balls crossing each other is what is undone, not a self-crossing)", r.status, r.self0, r.self1);
-#endif
     writeobj("twoball", tb.V, tb.nv, tb.T, tb.nt);
 
     /* 2. ballB moved out of a held ballA */
@@ -439,11 +434,10 @@ int main(int argc, char **argv)
     CHECK(rc == 0 && r.inside0 > 20 && r.inside == 0 && r.rounds >= 2 && r.cross0 > 20 && r.cross == 0, "ballB out of held ballA: %ld inside, %ld after %d rounds; crossing face pairs %ld, %ld after", r.inside0, r.inside, r.rounds, r.cross0, r.cross);
     CHECK(hin0 > 20 && hin1 == 0, "ballB by ballA's winding number: %ld inside before, %ld after", hin0, hin1);
     CHECK(!memcmp(A0, A.V, sizeof(double) * 3 * A.nv) && !memcmp(AT0, A.T, sizeof(int) * 3 * A.nt), "ballA unchanged byte for byte");
-#ifdef MK_SEPVOL_HELD_OPEN
     CHECK(r.status == 0 && !r.held_open && !r.held_flipped && !r.held_cross && r.held_vol > 0 && !r.self0 && !r.self1, "ballA taken as held: no open, flipped or crossing edges (%ld, %ld, %ld), volume %.4f ml; ballB's own crossing pairs %ld, %ld after", r.held_open, r.held_flipped, r.held_cross, r.held_vol * 1e6, r.self0, r.self1);
-#endif
     CHECK(r.vol1 < r.vol0 && r.vol1 > 0.9 * r.vol0, "ballB volume %.4f ml -> %.4f ml (%.2f %%)", r.vol0 * 1e6, r.vol1 * 1e6, 100 * (r.vol1 / r.vol0 - 1));
-    { /* faces, not only vertices, clear of ballA: each of ballB's face centres (where meshcheck probes) at least gap/4 from it */
+    { /* faces, not only vertices, clear of ballA: each of ballB's face centres (where meshcheck probes) at least gap/4
+         from it */
         double dmin = INFINITY;
         for (int t = 0; t < Bm.nt; t++) {
             double g[3] = {0, 0, 0}, w[3], q[3];
@@ -465,7 +459,8 @@ int main(int argc, char **argv)
         free(pr.V), free(pr.T);
     }
 
-    /* 3. two cubes 10 mm, 8 x 8 a face, the second 1 mm into the first (sepvol's 182 crossing pairs) */
+    /* 3. two cubes 10 mm, 8 x 8 a face, the second 1 mm into the first (sharp edges, where a push along the averaged
+       vertex normal would leave faces crossing); the volume lost against the 1 mm x 8 mm x 8 mm overlap */
     mesh C = {0};
     cube(&C, 0, 0, 0, 0.01, 8), cube(&C, 0.009, 0.002, 0.002, 0.01, 8);
     writeobj("cubes_before", C.V, C.nv, C.T, C.nt);
@@ -482,16 +477,16 @@ int main(int argc, char **argv)
     const double co = outward(C0, C.V, C.nv, C.T, C.nt);
     CHECK(co < 0.01, "cubes: no move outward along a vertex's normal (largest share %.3f)", co);
     writeobj("cubes", C.V, C.nv, C.T, C.nt);
-    { /* one round from the start: each vertex inside the other cube moves the full step (no stall), and the vertices on the
-         first cube's x = 10 mm edges go straight back along -x (edge-aware), not along their 45 degree normal. 1.4.1 smooths
-         each push toward its pushed neighbours' (MK_SEPVOL_SMOOTH passes): within that many rings (1.25 mm each) of the second
-         cube's side faces, where the pushes turn to -y or -z, the edge vertices' pushes turn part way too (up to 34 degrees,
-         MEASURED); farther away they stay on -x. */
+    { /* one round from the start: each vertex inside the other cube moves the full step (no stall), and the vertices on
+         the first cube's x = 10 mm edges go straight back along -x (edge-aware), not along their 45 degree normal. Each
+         push is smoothed toward its pushed neighbours' (MK_SEPVOL_SMOOTH passes): within that many rings (1.25 mm each)
+         of the second cube's side faces, where the pushes turn to -y or -z, the edge vertices' pushes turn part way too
+         (up to 34 degrees); farther away they stay on -x. */
         memcpy(C.V, C0, sizeof(double) * 3 * C.nv);
         mk_sepvol(C.V, C.nv, C.T, C.nt, NULL, 0, NULL, 0, gap, step, rings, 1, &r);
         int ne = 0, nok = 0, nin = 0, nfull = 0, nf = 0, nfok = 0;
         double worst = 0, fworst = 0;
-        const double band = 0.002 + (MK_SEPVOL_SMOOTH_ + 1.5) * 0.00125; /* past the smoothing's reach from the side faces */
+        const double band = 0.002 + (MK_SEPVOL_SMOOTH + 1.5) * 0.00125; /* beyond the smoothing's reach */
         for (int i = 0; i < C.nv; i++) {
             const double *p = C0 + 3 * i, m[3] = {C.V[3 * i] - p[0], C.V[3 * i + 1] - p[1], C.V[3 * i + 2] - p[2]};
             const double l = sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
@@ -518,9 +513,9 @@ int main(int argc, char **argv)
         for (int i = 0; i < a.nv; i++) for (int k = 0; k < 3; k++) lo[k] = fmin(lo[k], a.V[3 * i + k]), hi[k] = fmax(hi[k], a.V[3 * i + k]);
         for (int k = 0; k < 3; k++) ctr[k] = 0.5 * (lo[k] + hi[k]);
         const double R = 0.5 * (hi[0] - lo[0]), Ry = 0.5 * (hi[1] - lo[1]), sh[3] = {1.4 * R, 0, 0};
-        /* ballA is an ellipsoid (semi-axes R, Ry, R: 5, 7, 5 mm). The crease of A and A + sh lies at x = ctr + 0.7 R, out to
-           y = 0.714 Ry; A scaled by 0.3 and centred at (0.7 R, 1.14 Ry) sits beside it, outside both (its nearest point reads
-           1.03 to 1.05 in either's ellipsoid norm), 0.13 Ry above the crease */
+        /* ballA is an ellipsoid (semi-axes R, Ry, R: 5, 7, 5 mm). The crease of A and A + sh lies at x = ctr + 0.7 R,
+           out to y = 0.714 Ry; A scaled by 0.3 and centred at (0.7 R, 1.14 Ry) sits beside it, outside both (its
+           nearest point reads 1.03 to 1.05 in either's ellipsoid norm), 0.13 Ry above the crease */
         const double rs = 0.3, sh3[3] = {0.7 * R, 1.14 * Ry, 0};
         mesh s = {0};
         append(&s, &a, z);
@@ -538,11 +533,11 @@ int main(int argc, char **argv)
         free(T30), free(T3.V), free(T3.T), free(s.V), free(s.T), free(a.V), free(a.T);
     }
 
-    /* 6. mesher-helper's fault (1.4.1): a dense surface crumpled at its edges' scale, held against a sharp part. The heart
-       (414k vertices, mean edge 0.55 mm, neighbouring faces 80 to 140 degrees apart) against one rib came out of 1.4.0 clear of
-       the rib with 49 own crossing pairs, all between faces one edge apart. Here a crumpled cube (10 mm, 30 x 30 a face, its
-       faces' inner vertices up to 0.1 mm off along the face normal) is held against a 1 mm square bar turned 45 degrees, its edge
-       0.4 mm in, at mesher-helper's settings (gap 0.1 mm, step 0.25 mm, 4 rings, 30 rounds). */
+    /* 6. a dense surface crumpled at its edges' scale, held against a sharp part: moves of half an edge can fold it
+       into own crossing pairs between faces one edge apart, which the smoothing and the self-crossing guard (steps 3
+       and 4) prevent. Here a crumpled cube (10 mm, 30 x 30 a face, its faces' inner vertices up to 0.1 mm off along the
+       face normal) is held against a 1 mm square bar turned 45 degrees, its edge 0.4 mm in (gap 0.1 mm, step 0.25 mm,
+       4 rings, 30 rounds). */
     {
         mesh K = crumpled(30, 1e-4), R = bar(0.001, 0.006, 0.001, T_PI / 4, 4e-4);
         double *R0 = malloc(sizeof(double) * 3 * R.nv);
@@ -558,16 +553,12 @@ int main(int argc, char **argv)
         rc = mk_sepvol(K.V, K.nv, K.T, K.nt, R.V, R.nv, R.T, R.nt, 1e-4, 2.5e-4, 4, 30, &r);
         const long k1 = own_pairs(K.V, K.T, K.nt, NULL), kr1 = pair_cross(&K, &R), kin1 = held_inside(K.V, K.nv, &R);
         CHECK(K.nv == 5402 && K.nt == 10800 && k0 == 0 && kr0 > 100, "crumpled cube: %d vertices, %d faces, %ld own crossing pairs; %ld crossing pairs with the bar", K.nv, K.nt, k0, kr0);
-        CHECK(rc == 0 && k1 == 0, "crumpled cube against the bar: own crossing pairs %ld -> %ld (the test's count; 1.4.0 added them)", k0, k1);
+        CHECK(rc == 0 && k1 == 0, "crumpled cube against the bar: own crossing pairs %ld -> %ld (the test's count)", k0, k1);
         CHECK(rc == 0 && r.inside == 0 && r.cross == 0 && kin1 == 0 && kr1 == 0, "crumpled cube out of the bar: %ld vertices inside, %ld after %d rounds (winding: %ld); crossing pairs %ld, %ld after (the test's count: %ld)", r.inside0, r.inside, r.rounds, kin1, r.cross0, r.cross, kr1);
         CHECK(!memcmp(R0, R.V, sizeof(double) * 3 * R.nv), "the bar unchanged byte for byte");
         CHECK(r.vol1 < r.vol0 && r.vol1 > 0.99 * r.vol0 && r.worst < 0.002, "crumpled cube volume %.4f ml -> %.4f ml (%.2f %%), worst move %.3f mm", r.vol0 * 1e6, r.vol1 * 1e6, 100 * (r.vol1 / r.vol0 - 1), r.worst * 1e3);
-#ifdef MK_SEPVOL_HELD_OPEN
         CHECK(r.status == 0 && r.self0 == k0 && r.self1 == k1, "crumpled cube: the report's own crossing pairs %ld, %ld after (the test's: %ld, %ld); %ld moves halved and kept, %ld refused", r.self0, r.self1, k0, k1, r.shortened, r.refused);
-        CHECK(r.rounds <= 10 && r.refused <= 20, "crumpled cube: separated in %d rounds with %ld moves refused (the guard alone, no smoothing: 15 rounds, 91 refused, 6 crossing pairs left)", r.rounds, r.refused);
-#else
-        printf("SKIP  crumpled cube: no report fields in this header\n");
-#endif
+        CHECK(r.rounds <= 10 && r.refused <= 20, "crumpled cube: separated in %d rounds with %ld moves refused (at most 10 and 20)", r.rounds, r.refused);
         { /* for meshcheck: the cube and the bar as one file */
             mesh pr = {0};
             const double z[3] = {0, 0, 0};
@@ -578,13 +569,11 @@ int main(int argc, char **argv)
         free(K.V), free(K.T), free(R.V), free(R.T), free(R0);
     }
 
-    /* 6b. deeper: a 0.6 mm bar, its edge 0.8 mm into a cube crumpled up to 0.15 mm. Denting that far folds the crumples even
-       with the pushes smoothed (78 own crossing pairs without the guard, MEASURED; 1.4.0: 3741, the volume -18 %). The guard
-       halves or refuses those moves; here every round it allowed left more of the cube inside the bar than at the start (6
-       vertices inside and 165 crossing pairs, then 29 and 172 after one round, 13 to 23 and 172 to 194 after), so 1.4.1 stopped
-       after MK_SEPVOL_STALL rounds and handed back its best state, the input: never worse than it came in, nothing folded. The
-       cube's vertices inside the bar were past its middle (the bar is thinner than the dent), so their pushes were outward and
-       taken away; 1.5.2 sends them back the way they came, and the cube comes clear in 6 rounds, nothing refused, -0.86 %. */
+    /* 6b. deeper: a 0.6 mm bar, its edge 0.8 mm into a cube crumpled up to 0.15 mm. Denting that far folds the crumples
+       even with the pushes smoothed; the guard halves or refuses those moves, and the run never hands back a state
+       worse than the input. The cube's vertices inside the bar are past its middle
+       (the bar is thinner than the dent), so their pushes point outward and step 3 would take them away; the held exit
+       sends them back the way they came, and the cube comes clear. */
     {
         mesh K = crumpled(30, 1.5e-4), R = bar(0.0006, 0.006, 0.0006, T_PI / 4, 8e-4);
         double *R0 = malloc(sizeof(double) * 3 * R.nv);
@@ -595,15 +584,13 @@ int main(int argc, char **argv)
         CHECK(rc == 0 && k0 == 0 && k1 == 0, "crumpled cube, bar 0.8 mm in: own crossing pairs %ld -> %ld (the test's count)", k0, k1);
         CHECK(rc == 0 && kr0 > 100 && kr1 <= kr0 && kin1 <= kin0, "crumpled cube, bar 0.8 mm in: no worse than it came in: crossing pairs with the bar %ld -> %ld, vertices inside it %ld -> %ld (winding), %d rounds", kr0, kr1, kin0, kin1, r.rounds);
         CHECK(!memcmp(R0, R.V, sizeof(double) * 3 * R.nv) && r.vol1 > 0.98 * r.vol0, "crumpled cube, bar 0.8 mm in: the bar unchanged byte for byte; volume %.4f ml -> %.4f ml (%.2f %%)", r.vol0 * 1e6, r.vol1 * 1e6, 100 * (r.vol1 / r.vol0 - 1));
-#ifdef MK_SEPVOL_HELD_OPEN
         CHECK(r.status == 0 && r.self0 == 0 && r.self1 == 0 && r.inside <= r.inside0 && r.cross <= r.cross0, "crumpled cube, bar 0.8 mm in: the report's own crossing pairs %ld, %ld after; %ld moves halved and kept, %ld refused; inside %ld -> %ld, crossing pairs %ld -> %ld", r.self0, r.self1, r.shortened, r.refused, r.inside0, r.inside, r.cross0, r.cross);
-#endif
-        CHECK(rc == 0 && kr1 == 0 && kin1 == 0 && r.inside == 0 && r.cross == 0, "crumpled cube, bar 0.8 mm in, clear of it (1.5.2, the held exit): crossing pairs %ld -> %ld, vertices inside %ld -> %ld (the report: %ld, %ld)", kr0, kr1, kin0, kin1, r.inside, r.cross);
+        CHECK(rc == 0 && kr1 == 0 && kin1 == 0 && r.inside == 0 && r.cross == 0, "crumpled cube, bar 0.8 mm in, clear of it by the held exit: crossing pairs %ld -> %ld, vertices inside %ld -> %ld (the report: %ld, %ld)", kr0, kr1, kin0, kin1, r.inside, r.cross);
         free(K.V), free(K.T), free(R.V), free(R.T), free(R0);
     }
 
-    /* 7. a held mesh that cannot say inside from outside is refused: -2, V as it came in, the report saying why. 1.4.0 took the
-       union of the wall's overlapping atlas parts and left the heart at -263 ml. */
+    /* 7. a held mesh that cannot say inside from outside (open, crossing itself, inside out, one face turned) is
+       refused: -2, V as it came in, the report's status and held_ fields saying why. */
     {
         mesh a = readobj("test/data/sepvol_ballA.obj"), b = readobj("test/data/sepvol_ballB.obj");
         double *b0 = malloc(sizeof(double) * 3 * b.nv);
@@ -624,19 +611,18 @@ int main(int argc, char **argv)
         for (int c = 0; c < 4; c++) {
             rc = mk_sepvol(b.V, b.nv, b.T, b.nt, cs[c].V, cs[c].nv, cs[c].T, cs[c].nt, gap, step, rings, rounds, &r);
             CHECK(rc == -2 && !memcmp(b.V, b0, sizeof(double) * 3 * b.nv), "held mesh %s: refused (%d), ballB as it came in", cs[c].what, rc);
-#ifdef MK_SEPVOL_HELD_OPEN
-            const long want[4][3] = {{1, 0, 0}, {0, 0, 1}, {0, 0, 0}, {0, 3, 0}}; /* open, flipped, crossing: 0 or not, 3 exactly */
+            /* each case's open, flipped and crossing counts: 0 or not, and 3 exactly */
+            const long want[4][3] = {{1, 0, 0}, {0, 0, 1}, {0, 0, 0}, {0, 3, 0}};
             const int ok = r.status == cs[c].bit && (!want[c][0] == !r.held_open) && (want[c][1] == 3 ? r.held_flipped == 3 : r.held_flipped == 0) &&
                            (!want[c][2] == !r.held_cross) && r.inside0 == 0 && r.moved == 0 && (c != 2 || r.held_vol < 0);
             CHECK(ok, "held mesh %s: status %d; open edges %ld, edges run one way %ld, crossing pairs %ld, volume %.4f ml", cs[c].what, r.status, r.held_open, r.held_flipped, r.held_cross, r.held_vol * 1e6);
-#endif
         }
         free(a.V), free(a.T), free(b.V), free(b.T), free(b0), free(u.V), free(u.T), free(flip), free(one);
     }
 
-    /* 8. single mode on a part that already crosses itself: twoball, one vertex of the first ball (on its side away from the
-       second) pushed through that ball's far side (meshcheck's planted fault). The part's own crossings are reported and never
-       made more; the two balls still come apart. */
+    /* 8. single mode on a part that already crosses itself: twoball, one vertex of the first ball (on its side away
+       from the second) pushed through that ball's far side. The part's own crossings are reported and never made more;
+       the two balls still come apart (a tenth of the vertices inside, or fewer, are left). */
     {
         mesh s = readobj("test/data/sepvol_twoball.obj");
         int *comp = malloc(sizeof *comp * s.nv);
@@ -656,25 +642,22 @@ int main(int argc, char **argv)
             const double d = (s.V[3 * i] - c1[0]) * (s.V[3 * i] - c1[0]) + (s.V[3 * i + 1] - c1[1]) * (s.V[3 * i + 1] - c1[1]) + (s.V[3 * i + 2] - c1[2]) * (s.V[3 * i + 2] - c1[2]);
             if (d > best) best = d, far = i;
         }
-        for (int k = 0; k < 3; k++) s.V[3 * far + k] = c0[k] + 1.3 * (c0[k] - s.V[3 * far + k]); /* through the centre and out, 0.3 radius past the far side */
+        /* through the centre and out, 0.3 radius past the far side */
+        for (int k = 0; k < 3; k++) s.V[3 * far + k] = c0[k] + 1.3 * (c0[k] - s.V[3 * far + k]);
         const long s0 = own_pairs(s.V, s.T, s.nt, comp), in0 = cross_inside(s.V, s.nv, s.T, s.nt);
         rc = mk_sepvol(s.V, s.nv, s.T, s.nt, NULL, 0, NULL, 0, gap, step, rings, rounds, &r);
         const long s1 = own_pairs(s.V, s.T, s.nt, comp), in1 = cross_inside(s.V, s.nv, s.T, s.nt);
         CHECK(rc == 0 && s0 > 0 && s1 <= s0, "a part crossing itself, single mode: its own crossing pairs %ld -> %ld (the test's count, one part's faces)", s0, s1);
-#ifdef MK_SEPVOL_HELD_OPEN
         CHECK((r.status & MK_SEPVOL_SELF_CROSSES) && r.self0 == s0 && r.self1 == s1, "a part crossing itself: status %d (self-crossing reported), the report's own pairs %ld, %ld after (the test's: %ld, %ld)", r.status, r.self0, r.self1, s0, s1);
-#endif
         CHECK(in0 > 50 && in1 <= in0 / 10, "a part crossing itself beside the second ball: vertices of one ball inside the other %ld -> %ld (the winding number)", in0, in1);
         free(s.V), free(s.T), free(comp);
     }
 
-    /* 9. the maintainer's runaway (the maintainer.md #55, 1.4.0): a coarse mesh held against a part thinner than its faces. the maintainer's brachioradialis
-       r (2947 vertices, mean edge 2.2 mm) against its elbow's capsule and ligaments, gap 0.2 mm, step 3 mm, 3 rings, 8 rounds a call:
-       1.4.0 took the crossing pairs from 418 to 4531 and the muscle from 32.8 to -504 ml, step 2 pushing corners that lie behind one
-       face of the thin part through it. Here a cube 10 mm, 4 x 4 a face, against a plate 0.4 mm thick, 12 mm square, 24 x 24 a face,
-       turned 30 degrees, its edge 1.5 mm into the cube, at the maintainer's settings and 30 rounds: 1.4.0 turns the cube inside out (-112 %,
-       91 own crossing pairs, 202 -> 610 with the plate). 1.4.1's guard and best state bound it (116 pairs and 4 vertices left);
-       1.5.2's held exit (step 1) clears it. */
+    /* 9. a runaway to avoid: a coarse mesh held against a part thinner than its faces, with a large step. Step 2 can
+       push corners that lie behind one face of the thin part through it, round after round, until the mesh turns inside
+       out; the self-crossing guard and the best state bound that, and the held exit (step 1) clears it. Here a cube
+       10 mm, 4 x 4 a face, against a plate 0.4 mm thick, 12 mm square, 24 x 24 a face, turned 30 degrees, its edge
+       1.5 mm into the cube; gap 0.2 mm, step 3 mm, 3 rings, 30 rounds. */
     {
         mesh K = {0}, R = barn(4e-4, 0.012, 0.012, T_PI / 6, 1.5e-3, 24);
         cube(&K, 0, 0, 0, 0.01, 4);
@@ -687,15 +670,16 @@ int main(int argc, char **argv)
         const double w = maxmove(K0, K.V, K.nv);
         CHECK(K.nv == 98 && R.nv == 3458 && k0 == 0 && kr0 > 100, "coarse cube (%d vertices) against a thin plate (%d): %ld own crossing pairs, %ld with the plate, %ld vertices inside it", K.nv, R.nv, k0, kr0, kin0);
         CHECK(rc == 0 && k1 == 0 && r.vol1 > 0.8 * r.vol0 && w <= 3e-3 && kr1 <= kr0, "coarse cube against a thin plate, no runaway: own crossing pairs %ld -> %ld, with the plate %ld -> %ld, volume %.4f -> %.4f ml (%.2f %%), worst move %.3f mm (step 3 mm)", k0, k1, kr0, kr1, r.vol0 * 1e6, r.vol1 * 1e6, 100 * (r.vol1 / r.vol0 - 1), w * 1e3);
-        CHECK(rc == 0 && kr1 == 0 && kin1 == 0 && r.inside == 0 && r.cross == 0, "coarse cube clear of the thin plate (1.5.2, the held exit): crossing pairs %ld -> %ld, vertices inside %ld -> %ld (the report: %ld, %ld), %d rounds", kr0, kr1, kin0, kin1, r.inside, r.cross, r.rounds);
+        CHECK(rc == 0 && kr1 == 0 && kin1 == 0 && r.inside == 0 && r.cross == 0, "coarse cube clear of the thin plate by the held exit: crossing pairs %ld -> %ld, vertices inside %ld -> %ld (the report: %ld, %ld), %d rounds", kr0, kr1, kin0, kin1, r.inside, r.cross, r.rounds);
         writepair("coarse", &K, &R);
         free(K.V), free(K.T), free(R.V), free(R.T), free(K0);
     }
 
-    /* 10. past the middle of a thin held part (race-c1 H1, the maintainer.md #56): of b67's muscle vertices inside a thin partner (a scapula
-       blade, the interosseous membrane), 35 % have their nearest exit on its far side; 1.4.1 took the outward push away and they slid
-       and stalled. A cube 10 mm, 20 x 20 a face, its +x face 0.7 mm into a plate 1 mm thick and 5.8 mm square (16 x 16 a face,
-       off the cube's grid lines), the test's settings: 1.4.1 left 121 of 146 vertices inside. They leave by the side they came in. */
+    /* 10. past the middle of a thin held part: a vertex whose nearest exit lies on the part's far side has a push that
+       points outward, which step 3 takes away, so it would slide sideways and stall. A cube 10 mm, 20 x 20 a face, its
+       +x face 0.7 mm into a plate 1 mm thick and 5.8 mm square (16 x 16 a face, off the cube's grid lines), the test's
+       settings. The vertices leave by the side they came in: the volume lost is one to two times the overlap, and no
+       move is as long as twice the depth plus the gap. */
     {
         mesh K = {0};
         cube(&K, 0, 0, 0, 0.01, 20);
@@ -714,12 +698,13 @@ int main(int argc, char **argv)
         free(K.V), free(K.T), free(R.V), free(R.T), free(K0), free(R0);
     }
 
-    /* 11. where going back is wrong: a bar 4.4 mm wide through a slab 3 mm thick (20 mm square, 20 x 20 a face), its top 0.5 mm above
-       the slab's. The slab's top vertices inside the bar have their nearest exit ahead (the bar's top), but the bar runs on through
-       the slab: along their inward normal the slab's own bottom comes before the bar's far side, so their nearest exit stays (1.5.2).
-       Without that check they were pushed down through the slab: a third of its volume, against 9 % (1.4.1 the same 9 %). The
-       slab's vertices are moved up to 0.1 um at random, so no two of its faces lie exactly in one plane: a side folded flat onto
-       itself in its own plane reads as crossing to this file's segment test (rounding on a face's edge), not to the header's. */
+    /* 11. where going back is wrong: a bar 4.4 mm wide through a slab 3 mm thick (20 mm square, 20 x 20 a face), its
+       top 0.5 mm above the slab's. The slab's top vertices inside the bar have their nearest exit ahead (the bar's
+       top), but the bar runs on through the slab: along their inward normal the slab's own bottom comes before the
+       bar's far side, so their nearest exit stays. Without that check they would be pushed down through the slab; the
+       row allows a volume loss under 15 %. The slab's vertices are moved up to 0.1 um at random, so no two of its faces
+       lie exactly in one plane: a side folded flat onto itself in its own plane reads as crossing to this file's
+       segment test (rounding on a face's edge), not to the header's. */
     {
         const double lo[3] = {0, 0, 0}, hi[3] = {0.02, 0.02, 0.003}, blo[3] = {0.0079, -0.005, -0.008}, bhi[3] = {0.0123, 0.025, 0.0035};
         mesh S = box(lo, hi, 20), R = box(blo, bhi, 8);
@@ -731,9 +716,9 @@ int main(int argc, char **argv)
         free(S.V), free(S.T), free(R.V), free(R.T);
     }
 
-    /* 12. MK_SEPVOL_PAIRS (1.5.2, the maintainer the maintainer.md #55): the plate of row 9, square to x and 0.4 mm thick, runs right through the
-       coarse cube 1.5 mm in from its face, with no vertex of the cube inside it. No vertex move can clear that; step 2 squeezes the
-       cube round it (about a third of its volume). With the switch off nothing moves, and the crossing pairs are reported. */
+    /* 12. MK_SEPVOL_PAIRS: the plate of row 9, square to x and 0.4 mm thick, runs right through the coarse cube 1.5 mm
+       in from its face, with no vertex of the cube inside it. No vertex move can clear that; step 2 squeezes the cube
+       round it (about a third of its volume). With the switch off nothing moves; the crossing pairs are reported. */
     {
         mesh K = {0}, R = barn(4e-4, 0.012, 0.012, 0, 1.5e-3, 24);
         cube(&K, 0, 0, 0, 0.01, 4);
@@ -748,9 +733,10 @@ int main(int argc, char **argv)
         free(K.V), free(K.T), free(R.V), free(R.T), free(K0);
     }
 
-    /* 13. the verification work F-1 (1.5.3): no memory leaves V as it came in. Two cubes 2 x 2 a face, 1 mm into each other, single mode, 3
-       rounds; each of the call's allocations made to fail in turn, from the first (before V0 was filled, 1.5.2 copied V0's
-       uninitialised block over V) to those of the last round (after V has moved). */
+    /* 13. no memory: -1 with V as it came in and the report zeroed. Two cubes 2 x 2 a face, 1 mm into each other,
+       single mode, 3 rounds; each of the call's allocations made to fail in turn, from the first (before the saved copy
+       of V is filled, so copying that block back over V would show as 0xA5 bytes) to those of the last round (after V
+       has moved). */
     {
         mesh m = {0};
         cube(&m, 0, 0, 0, 0.01, 2), cube(&m, 0.009, 0.002, 0.002, 0.01, 2);
@@ -772,32 +758,33 @@ int main(int argc, char **argv)
             nok += rk == -1 && !memcmp(m.V, m0, sizeof(double) * 3 * m.nv) && !memcmp(&r, &zero, sizeof r);
         }
         t_fi_at = -1;
-        CHECK(rc == 0 && moved && nalloc > 20 && nok == nalloc, "F-1: each of the call's %ld allocations failing in turn: %ld return -1 (no memory), %ld of them with V exactly as it came in and the report zeroed (without failures: %d rounds, %ld vertices moved)",
+        CHECK(rc == 0 && moved && nalloc > 20 && nok == nalloc, "allocation failures: each of the call's %ld allocations failing in turn: %ld return -1 (no memory), %ld of them with V exactly as it came in and the report zeroed (without failures: %d rounds, %ld vertices moved)",
               nalloc, nm1, nok, rounds0, moved0);
         free(m.V), free(m.T), free(m0);
     }
-    /* 14. the verification work F-A (1.5.3): a part thinner than eps (a thousandth of the mean edge) is inside nothing. A cube 0.2 mm across, 4 m
-       from a cube 2 m across (eps 0.96 mm): the point eps inside each of its vertices lies outside it, outside every part, and
-       even parity there read "inside another part" (1.5.2: its 8 vertices inside). The winding number (0, not 2) decides. */
+    /* 14. a part thinner than eps (a thousandth of the mean edge) is inside nothing. A cube 0.2 mm across, 4 m from a
+       cube 2 m across (eps 0.96 mm): the point eps inside each of its vertices lies outside it, outside every part,
+       where even parity would read "inside another part". The winding number (0, not 2) decides: nothing is inside,
+       nothing moves. */
     {
         mesh m = {0};
         cube(&m, -1, -1, -1, 2, 2), cube(&m, 5 - 1e-4, -1e-4, -1e-4, 2e-4, 1);
         double *m0 = malloc(sizeof(double) * 3 * m.nv);
         memcpy(m0, m.V, sizeof(double) * 3 * m.nv);
         rc = mk_sepvol(m.V, m.nv, m.T, m.nt, NULL, 0, NULL, 0, 0, 0.1, 0, 3, &r);
-        CHECK(rc == 0 && r.inside0 == 0 && r.moved == 0 && r.cross0 == 0 && !memcmp(m.V, m0, sizeof(double) * 3 * m.nv), "F-A: a cube 0.2 mm across beside one 2 m across: %ld vertices inside another part (1.5.2: 8), %ld moved, %d rounds",
+        CHECK(rc == 0 && r.inside0 == 0 && r.moved == 0 && r.cross0 == 0 && !memcmp(m.V, m0, sizeof(double) * 3 * m.nv), "a cube 0.2 mm across beside one 2 m across: %ld vertices inside another part, %ld moved, %d rounds",
               r.inside0, r.moved, r.rounds);
         free(m.V), free(m.T), free(m0);
     }
-#ifndef T_OLD /* rows 15 and 16 call 1.5.3's internals */
-    /* 15. (1.5.3) F-A's winding number made cheap: on a closed mesh mk_sepvol_two_ reads the clean rays' facings summed (exactly
-       the winding number there) where mk_winding_number costs every triangle (orig02c: 750k triangles at each of about 900 points
-       a round). At the point eps inside every vertex of twoball, the two cubes and F-A's pair, the decision on the facings (closed
-       1) is the one on the winding number (closed 0); the even-parity points include ones covered twice and ones covered by nothing */
+    /* 15. row 14's winding number made cheap: on a closed mesh mk_sepvol_two_ reads the clean rays' facings summed
+       (exactly the winding number there) where mk_winding_number costs every triangle at every point. At the point eps
+       inside every vertex of twoball, the two cubes and row 14's pair, the decision on the facings (closed 1) is the
+       one on the winding number (closed 0); the even-parity points include ones covered twice and by nothing */
     {
+        /* mk_sepvol_two_'s three ray directions */
         static const double dirs[3][3] = {{0.5773502691896258, 0.5773502691896258, 0.5773502691896258},
                                           {-0.3015113445777636, 0.9045340337332909, 0.3015113445777636},
-                                          {0.2672612419124244, -0.5345224838248488, 0.8017837257372732}}; /* mk_sepvol_two_'s */
+                                          {0.2672612419124244, -0.5345224838248488, 0.8017837257372732}};
         mesh ms[3] = {readobj("test/data/sepvol_twoball.obj"), {0}, {0}};
         cube(&ms[1], 0, 0, 0, 0.01, 8), cube(&ms[1], 0.009, 0.002, 0.002, 0.01, 8);
         cube(&ms[2], -1, -1, -1, 2, 2), cube(&ms[2], 5 - 1e-4, -1e-4, -1e-4, 2e-4, 1);
@@ -824,12 +811,13 @@ int main(int argc, char **argv)
             }
             mk_bvh_free(&B), free(N), free(m->V), free(m->T);
         }
-        CHECK(closed == 3 && dis == 0 && nin > 0 && e0 > 0 && e2 > 0, "the facings for the winding number (closed meshes): at %ld points (twoball, two cubes, F-A's pair) %ld decisions unlike mk_winding_number's; %ld inside another part; even parity with facings 2 at %ld points, 0 at %ld",
+        CHECK(closed == 3 && dis == 0 && nin > 0 && e0 > 0 && e2 > 0, "the facings for the winding number (closed meshes): at %ld points (twoball, two cubes, the 0.2 mm and 2 m cubes) %ld decisions unlike mk_winding_number's; %ld inside another part; even parity with facings 2 at %ld points, 0 at %ld",
               npt, dis, nin, e2, e0);
     }
-    /* 16. (1.5.3) the facings only on a closed mesh. A cube 1 across, 4 x 4 a face, and an open sheet (two triangles, 11 across,
-       facing +z) through it at z = 0.7: below the sheet each of mk_sepvol_two_'s rays leaves the cube and passes the sheet, facings
-       2, while the winding number is 1 and the sheet's solid angle, under 1.5. The mesh has open edges, so the winding number decides */
+    /* 16. the facings only on a closed mesh. A cube 1 across, 4 x 4 a face, and an open sheet (two triangles, 11
+       across, facing +z) through it at z = 0.7: below the sheet each of mk_sepvol_two_'s rays leaves the cube and
+       passes the sheet, facings 2, while the winding number is 1 and the sheet's solid angle, under 1.5. The mesh has
+       open edges, so the winding number decides */
     {
         mesh m = {0};
         cube(&m, 0, 0, 0, 1, 4);
@@ -859,11 +847,10 @@ int main(int argc, char **argv)
         if (!rb) mk_bvh_free(&B);
         free(N), free(m.V), free(m.T);
     }
-#endif
 
-#ifdef MK_SEPVOL_STILL_CROSSES
-    /* 17. the verification work F-C (1.5.5): a point covered three times has odd parity and was read as covered once. Three unit spheres with a common
-       region, 16 x 10: the vertices inside another part, counted by the winding number of the other parts alone */
+    /* 17. a point covered three times has odd parity, yet lies inside another part. Three unit spheres with a common
+       region, 16 x 10: the vertices inside another part, counted by the winding number of the other parts alone (159,
+       47 of them inside two others), against the header's count */
     {
         mesh m = {0};
         for (int p = 0; p < 3; p++) {
@@ -875,8 +862,9 @@ int main(int argc, char **argv)
         double *V = malloc(sizeof(double) * 3 * m.nv);
         memcpy(V, m.V, sizeof(double) * 3 * m.nv);
         rc = mk_sepvol(V, m.nv, m.T, m.nt, NULL, 0, NULL, 0, 0.01, 0.05, 2, 1, &r);
-        CHECK(rc == 0 && ref == 159 && twice == 47 && r.inside0 == ref, "F-C: three spheres: %ld vertices inside another part by the others' winding number, %ld of them inside two others; the header reads %ld (1.5.4: 112)", ref, twice, r.inside0);
-        /* 19. the same with a mesh that is not closed: one open triangle far off, so the facings cannot stand for the winding number */
+        CHECK(rc == 0 && ref == 159 && twice == 47 && r.inside0 == ref, "three spheres: %ld vertices inside another part by the others' winding number, %ld of them inside two others; the header reads %ld", ref, twice, r.inside0);
+        /* 19. the same with a mesh that is not closed: one open triangle far off, so the facings cannot stand for the
+           winding number */
         const double farv[9] = {50, 0, 0, 51, 0, 0, 50, 1, 0};
         const int nv0 = m.nv, ot[3] = {nv0, nv0 + 1, nv0 + 2};
         m.V = realloc(m.V, sizeof(double) * 3 * (m.nv + 3)), m.T = realloc(m.T, sizeof(int) * 3 * (m.nt + 1));
@@ -884,10 +872,11 @@ int main(int argc, char **argv)
         V = realloc(V, sizeof(double) * 3 * m.nv);
         memcpy(V, m.V, sizeof(double) * 3 * m.nv);
         rc = mk_sepvol(V, m.nv, m.T, m.nt, NULL, 0, NULL, 0, 0.01, 0.05, 2, 1, &r);
-        CHECK(rc == 0 && mk_sepvol_closed_(m.T, m.nt) == 0 && r.inside0 == ref, "F-C, an open triangle far off added (the mesh not closed): the header reads %ld inside (%ld)", r.inside0, ref);
+        CHECK(rc == 0 && mk_sepvol_closed_(m.T, m.nt) == 0 && r.inside0 == ref, "three spheres and an open triangle far off (the mesh not closed): the header reads %ld inside (%ld)", r.inside0, ref);
         free(V), free(m.V), free(m.T);
     }
-    /* 18. (1.5.5) regular nested tetrahedra, one to four shells, none crossing: every vertex of every inner shell is inside another part */
+    /* 18. regular nested tetrahedra, one to four shells, none crossing: every vertex of every inner shell is inside
+       another part */
     {
         int ok = 0;
         long got[5] = {0};
@@ -898,11 +887,11 @@ int main(int argc, char **argv)
             got[n] = r.inside0, ok += rc == 0 && r.inside0 == 4 * (n - 1) && r.cross0 == 0;
             free(m.V), free(m.T);
         }
-        CHECK(ok == 4, "nested tetrahedra, 1 to 4 shells: %ld, %ld, %ld, %ld vertices inside another part (0, 4, 8, 12; 1.5.4 read 4 and 8 at 3 and 4 shells)", got[1], got[2], got[3], got[4]);
+        CHECK(ok == 4, "nested tetrahedra, 1 to 4 shells: %ld, %ld, %ld, %ld vertices inside another part (0, 4, 8, 12 wanted)", got[1], got[2], got[3], got[4]);
     }
-    /* 20. (1.5.5) each part of the held mesh wound outward, unless it is a cavity inside another. Codex's held mesh with a separate
-       tetrahedron wound inward; a hollow cube (an inner shell wound inward) with M in its wall and in its cavity; an outward island in the
-       cavity; an inward shell inside the cavity */
+    /* 20. each part of the held mesh wound outward, unless it is a cavity inside another. A held mesh with a separate
+       tetrahedron wound inward (refused, though its total volume is positive); a hollow cube (an inner shell wound
+       inward) with M in its wall and in its cavity; an outward island in the cavity; an inward shell in the cavity */
     {
         mesh H = {0}, M = {0};
         tetra(&H, 2, 0, 0), tetra(&H, 0.5, 10, 1), tetra(&M, 0.1, 10, 0);
@@ -928,13 +917,13 @@ int main(int argc, char **argv)
         CHECK(oki && rc == -2 && (r.status & MK_SEPVOL_HELD_FLIPPED) && r.held_inward == 1, "an outward island in the cavity: taken; an inward shell in the cavity (no solid around it): returns %d, %ld parts wound inward", rc, r.held_inward);
         free(Ho.V), free(Ho.T), free(W.V), free(W.T), free(C.V), free(C.T), free(Is.V), free(Is.T), free(In.V), free(In.T);
     }
-    /* 21. the verification work F-B (1.5.5): two bars 6 x 0.2 x 0.2 crossed like an X, no vertex of either inside the other: moving vertices cannot clear
-       them, and squeezing them took 57 % of their volume. The run stops, hands back the best state before a part lost more than
-       MK_SEPVOL_CRUSH, and says the parts still cross */
+    /* 21. two bars 6 x 0.2 x 0.2 crossed like an X, no vertex of either inside the other: moving vertices cannot clear
+       them, and squeezing them through costs a large share of their volume. The run stops, hands back the best state
+       before a part lost more than MK_SEPVOL_CRUSH, and says the parts still cross */
     {
         mesh m = {0};
         unsigned long long g = 7;
-        diag_cube(&m, &g); /* [-1, 1]^3, each square split along the verification work's random diagonal: the case as the finding builds it */
+        diag_cube(&m, &g); /* [-1, 1]^3, each square split along a pseudo-random diagonal (xorshift, seed 7) */
         for (int i = 0; i < m.nv; i++) m.V[3 * i] *= 3, m.V[3 * i + 1] *= 0.1, m.V[3 * i + 2] *= 0.1;
         const int v0 = m.nv;
         diag_cube(&m, &g);
@@ -942,17 +931,16 @@ int main(int argc, char **argv)
         double *V = malloc(sizeof(double) * 3 * m.nv);
         memcpy(V, m.V, sizeof(double) * 3 * m.nv);
         rc = mk_sepvol(V, m.nv, m.T, m.nt, NULL, 0, NULL, 0, 0.01, 0.05, 1, 60, &r);
-        CHECK(rc == 0 && r.part_loss <= MK_SEPVOL_CRUSH && r.vol1 >= (1 - MK_SEPVOL_CRUSH) * r.vol0 && r.inside == 0, "F-B: two crossed bars: volume %.4f -> %.4f, the most any part lost %.1f %% (limit %.0f %%), %ld of %ld crossing pairs left after %d rounds", r.vol0, r.vol1, 100 * r.part_loss, 100 * (double)MK_SEPVOL_CRUSH, r.cross, r.cross0, r.rounds);
-        CHECK((r.status & MK_SEPVOL_CRUSHED) && (r.status & MK_SEPVOL_STILL_CROSSES) && r.cross > 0, "F-B: the status says the run stopped (%d) and the parts still cross (%d): status %d", (r.status & MK_SEPVOL_CRUSHED) != 0, (r.status & MK_SEPVOL_STILL_CROSSES) != 0, r.status);
+        CHECK(rc == 0 && r.part_loss <= MK_SEPVOL_CRUSH && r.vol1 >= (1 - MK_SEPVOL_CRUSH) * r.vol0 && r.inside == 0, "two crossed bars: volume %.4f -> %.4f, the most any part lost %.1f %% (limit %.0f %%), %ld of %ld crossing pairs left after %d rounds", r.vol0, r.vol1, 100 * r.part_loss, 100 * (double)MK_SEPVOL_CRUSH, r.cross, r.cross0, r.rounds);
+        CHECK((r.status & MK_SEPVOL_CRUSHED) && (r.status & MK_SEPVOL_STILL_CROSSES) && r.cross > 0, "two crossed bars: the status says the run stopped (%d) and the parts still cross (%d): status %d", (r.status & MK_SEPVOL_CRUSHED) != 0, (r.status & MK_SEPVOL_STILL_CROSSES) != 0, r.status);
         memcpy(V, m.V, sizeof(double) * 3 * m.nv);
         rc = mk_sepvol(V, m.nv, m.T, m.nt, NULL, 0, NULL, 0, 0.01, 0.05, 1, 2, &r);
-        CHECK(rc == 0 && r.status == MK_SEPVOL_STILL_CROSSES && r.cross > 0, "F-B, two rounds only: pairs left (%ld) and nothing crushed: status %d", r.cross, r.status);
+        CHECK(rc == 0 && r.status == MK_SEPVOL_STILL_CROSSES && r.cross > 0, "two crossed bars, two rounds only: pairs left (%ld) and nothing crushed: status %d", r.cross, r.status);
         memcpy(tb.V, tb0, sizeof(double) * 3 * tb.nv);
         rc = mk_sepvol(tb.V, tb.nv, tb.T, tb.nt, NULL, 0, NULL, 0, gap, step, rings, rounds, &r);
         CHECK(rc == 0 && r.status == 0 && r.cross == 0 && r.part_loss > 0 && r.part_loss < 0.1, "twoball, a separation that succeeds: status %d, the most any part lost %.2f %%", r.status, 100 * r.part_loss);
         free(V), free(m.V), free(m.T);
     }
-#endif
 
     /* 5. refusals: V as it came in */
     {

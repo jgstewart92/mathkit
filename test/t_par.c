@@ -1,8 +1,8 @@
-/* mathkit's threads (mk_par.h). Built with -fopenmp, every threaded routine runs at 1, 2 and 12 threads and must give the same
-   bytes. Each result's hash is printed on a BITS line, and check.sh requires a build without OpenMP to print the same lines.
-   Also: the batch queries against their single calls, the sdf cases reaching the stages they are meant to (odd rows, near
-   nodes, several tiles), and CG's block sums against one serial sum (1.4.0's form, written out here): 1.5.0's one change of bits.
-   1.5.6: mk_hhd_split. 1.6.1: mk_welch from two threads on one plan (a row, no BITS line). */
+/* mathkit's threads (mk_par.h). Built with -fopenmp, every threaded routine runs at 1, 2 and 12 threads and must give
+   the same bytes. Each result's hash is printed on a BITS line, and check.sh requires a build without OpenMP to print
+   the same lines. Also: the batch queries against their single calls, the sdf cases reaching the stages they are meant
+   to (odd rows, near nodes, several tiles), CG's block sums against one serial sum (written out here), the block
+   arithmetic near LONG_MAX, and mk_welch from two threads on one plan (a row, no BITS line). */
 #include "../include/mk_sparse.h"
 #include "../include/mk_sdf.h"
 #include "../include/mk_hhd.h"
@@ -64,7 +64,7 @@ static void lap3(mk_csr *A, int m, int periodic, double c)
     mk_csr_from_triplets(A, n, k, ri, ci, v);
     free(ri), free(v);
 }
-/* CG without a preconditioner as 1.4.0 ran it: the same steps, every dot one serial sum */
+/* CG without a preconditioner, mk_cg's steps with every dot product one serial sum: the reference for the block sums */
 static double dot1(const double *a, const double *b, int n)
 {
     double s = 0;
@@ -212,7 +212,8 @@ int main(void)
         }
         same(sv[s].name, hs);
     }
-    /* the size of the one change of bits: CG with block sums against CG with one serial sum, 1.4.0's */
+    /* CG with block sums against CG with one serial sum: close and in about the same iterations, but not the same bits,
+       which shows the block sums are in use */
     threads(nthr[NRUN - 1]);
     int it5, it4;
     memset(x, 0, sizeof(double) * (size_t)n), memset(y, 0, sizeof(double) * (size_t)n);
@@ -221,7 +222,7 @@ int main(void)
     int same_bits = 1;
     for (int i = 0; i < n; i++) dmax = fmax(dmax, fabs(x[i] - y[i])), xmax = fmax(xmax, fabs(y[i])), same_bits &= x[i] == y[i];
     CHECK(!r5 && !r4 && dmax <= 1e-9 * xmax && abs(it5 - it4) <= 2 && !same_bits,
-          "CG, 24^3 Laplacian, tol 1e-10: block sums against one serial sum (1.4.0's): x differs by %.2g of its largest (%s), %d and %d iterations", dmax / xmax,
+          "CG, 24^3 Laplacian, tol 1e-10: block sums against one serial sum: x differs by %.2g of its largest (%s), %d and %d iterations", dmax / xmax,
           same_bits ? "bit for bit the same" : "bits differ", it5, it4);
     mk_csr_free(&A), mk_csr_free(&Pd), mk_csr_free(&C), free(b);
 
@@ -289,7 +290,7 @@ int main(void)
     CHECK(bad == 0, "mk_winding_number_many: the single calls' values bit for bit (%d differ)", bad);
     mk_bvh_free(&B), free(P), free(d2), free(q), free(w), free(tri), free(in);
 
-    { /* 1.5.6: mk_hhd_split, its transforms by column blocks and its solves by rows, spread over the lanes */
+    { /* mk_hhd_split: its transforms by column blocks and its solves by rows, spread over the threads */
         enum { HX = 256, HY = 144 };
         mk_hhd H;
         double *hu = malloc(sizeof(double) * HX * HY), *hv = malloc(sizeof(double) * HX * HY);
@@ -305,8 +306,8 @@ int main(void)
         mk_hhd_free(&H), free(hu), free(hv);
     }
 
-    { /* 1.5.3 (the verification work H18): the block arithmetic for n near LONG_MAX, where 1.5.2's (n + k - 1) / k overflowed a long (UBSan at
-         mk_par.h:36 and :40 for n = 9223371998217895936). The test's own ceilings in unsigned long, which cannot wrap there */
+    { /* the block arithmetic for n near LONG_MAX, where the plain ceiling (n + k - 1) / k would overflow a long
+         (n = 9223371998217895936 among them). The test's own ceilings are in unsigned long, which cannot wrap there */
         volatile long nv[] = {LONG_MAX, LONG_MAX - 1, LONG_MAX - 255, LONG_MAX - 256, 9223371998217895936L, LONG_MAX / 2 + 1, (1L << 62) + 1};
         int ok = 1, nok = 0;
         for (size_t c = 0; c < sizeof nv / sizeof *nv; c++) {
@@ -324,12 +325,12 @@ int main(void)
             k_ok &= at == n;
             ok &= k_ok, nok += k_ok;
         }
-        CHECK(ok, "mk_par near LONG_MAX (the verification work H18): %d of %d counts from 2^62 + 1 to LONG_MAX cut into at most %d blocks of the exact ceiling's length, tiling [0, n)", nok,
+        CHECK(ok, "mk_par near LONG_MAX: %d of %d counts from 2^62 + 1 to LONG_MAX cut into at most %d blocks of the exact ceiling's length, tiling [0, n)", nok,
               (int)(sizeof nv / sizeof *nv), MK_PAR_NBLK);
     }
 #ifdef _OPENMP
-    { /* review 2 #3 (1.6.1): mk_stft_frame windowed into a buffer of the const plan's, so two threads sharing one mk_spec mixed their frames
-         (1.6.0: 161 and 198 of 200 rounds differed from the serial answer). Two threads, one plan, each its own signal, 100 rounds. */
+    { /* two threads share one const mk_spec plan, each with its own signal, 100 rounds: every answer equals the
+         serial one, so mk_stft_frame keeps its windowed frame out of the plan */
         enum { NS = 1 << 15, NF = 1024, NB = NF / 2 + 1, RR = 100 };
         static double sx[2][NS], ref[2][NB];
         double *got = malloc(sizeof(double) * 2 * NB); /* not a fixed-size array: gcc -O3 cannot bound mk_welch's nb and warns */
@@ -351,7 +352,7 @@ int main(void)
             }
             mk_spec_free(&sp);
         }
-        CHECK(bad == 0 && nt2, "review 2 #3: mk_welch from 2 threads on one plan, %d rounds: %d answers differ from the serial ones", RR, bad);
+        CHECK(bad == 0 && nt2, "mk_welch from 2 threads on one plan, %d rounds: %d answers differ from the serial ones", RR, bad);
         free(got);
     }
 #endif

@@ -1,12 +1,12 @@
+/* mk_rng.h: xoshiro256** against its authors' outputs, the moments of the Gaussian and uniform draws, a chi-squared
+   test of mk_rng_below, and the compensated sum mk_sum. */
 #include "../include/mk_rng.h"
-#ifdef MK_RIBBON_RNG_H   /* another project's RNG to compare with bit for bit: -DMK_RIBBON_RNG_H='"path/ribbon_rng.h"' */
-#include MK_RIBBON_RNG_H
-#endif
 #include "t.h"
 
 int main(void)
 {
-    /* the authors' reference: xoshiro256** from state {1, 2, 3, 4} */
+    /* xoshiro256** from state {1, 2, 3, 4}: the first four outputs of the authors' reference code (Blackman and Vigna
+       2018) */
     mk_rng g = {{1, 2, 3, 4}, 0, 0};
     uint64_t want[4] = {11520ULL, 0ULL, 1509978240ULL, 1215971899390074240ULL}, got[4];
     for (int i = 0; i < 4; i++) got[i] = mk_rng_next(&g);
@@ -14,13 +14,6 @@ int main(void)
           "xoshiro256** from {1,2,3,4}: 11520, 0, 1509978240, 1215971899390074240 (got %llu %llu %llu %llu)",
           (unsigned long long)got[0], (unsigned long long)got[1], (unsigned long long)got[2], (unsigned long long)got[3]);
     mk_rng a;
-#ifdef MK_RIBBON_RNG_H
-    RbRng b;
-    mk_rng_seed(&a, 12345, 7), rb_seed(&b, 12345, 7);
-    int same = 1;
-    for (int i = 0; i < 100000; i++) same &= mk_rng_next(&a) == rb_next(&b);
-    CHECK(same, "seeded (12345, stream 7): 100000 draws equal ribbon_rng.h's bit for bit");
-#endif
 
     mk_rng_seed(&a, 1, 0);
     enum { N = 1000000 };
@@ -52,13 +45,11 @@ int main(void)
     for (int i = 0; i < 3; i++) mk_sum_add(&ua, sa[i]), mk_sum_add(&ub, sb[i]), mk_sum_add(&uc, sc[i]);
     double va = mk_sum_value(&ua), vb = mk_sum_value(&ub), vc = mk_sum_value(&uc);
     CHECK(va == inf && vb == -inf && isnan(vc), "non-finite addends give a plain sum's result: 1 + inf + 2 = %g, 1 - inf + 5 = %g, inf + 1 - inf = %g", va, vb, vc);
-    { /* 1.2.2: the verification work Result 84, R1 and R2 */
-        CHECK(mk_rotl64(0x8000000000000001ULL, 0) == 0x8000000000000001ULL && mk_rotl64(1, 64) == 1, "R1: rotl by 0 and by 64 is the identity");
-#ifndef T_OLD
+    { /* edge cases: a rotation by 0 or 64 bits, and below(0) */
+        CHECK(mk_rotl64(0x8000000000000001ULL, 0) == 0x8000000000000001ULL && mk_rotl64(1, 64) == 1, "rotl by 0 and by 64 is the identity");
         mk_rng g0;
         mk_rng_seed(&g0, 7, 0);
-        CHECK(mk_rng_below(&g0, 0) == 0, "R2: below(0) returns 0 instead of dividing by zero");
-#endif
+        CHECK(mk_rng_below(&g0, 0) == 0, "below(0) returns 0 instead of dividing by zero");
     }
     return wrong;
 }

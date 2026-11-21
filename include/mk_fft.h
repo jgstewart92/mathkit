@@ -1,8 +1,9 @@
-/* mathkit: radix-2 FFT, planned, in place. Forward is e^{-i}, inverse e^{+i}; neither is normalized (divide by n after an
-   inverse). Complex (double complex) and split (re[], im[]) forms share one plan. 2-D and 3-D run along each axis in turn.
-   A real-input transform of length n gives n/2+1 bins through one complex transform of n/2. Any other length (1.5.6):
+/* mathkit: radix-2 FFT, planned, in place. Forward is e^{-i}, inverse e^{+i}; neither is normalized (divide by n after
+   an inverse). Complex (double complex) and split (re[], im[]) forms share one plan. 2-D and 3-D run along each axis in
+   turn. A real-input transform of length n gives n/2+1 bins through one complex transform of n/2. Any other length:
    mk_fftm, mixed radix, at the end of this file. Header only, C23.
-   Experimental (1.6.0): mk_fftm alone, not frozen with the rest of this file (the radix-2 transforms, mk_rfft). */
+   Experimental: mk_fftm alone, whose results may change between releases; the radix-2 transforms and mk_rfft are
+   frozen. */
 #ifndef MK_FFT_H
 #define MK_FFT_H
 #include <complex.h>
@@ -27,7 +28,8 @@ static inline void mk_fft_free(mk_fft *p)
 static inline int mk_fft_plan(mk_fft *p, int n)
 {
     p->rev = NULL, p->c = p->s = NULL, p->n = 0;
-    if (n < 1 || n > (1 << 29) || (n & (n - 1))) return -1; /* mk_fft_ri doubles an int up to 2n: n <= 2^29 keeps it in range */
+    /* mk_fft_ri doubles an int up to 2n: n <= 2^29 keeps it in range */
+    if (n < 1 || n > (1 << 29) || (n & (n - 1))) return -1;
     int lg = 0;
     while ((1 << lg) < n) lg++;
     int h = n > 1 ? n / 2 : 1;
@@ -52,7 +54,7 @@ static inline void mk_fft_ri(const mk_fft *p, double *re, double *im, int invers
     for (int i = 0; i < n; i++) {
         int j = p->rev[i];
 #if defined(MK_MUTATE) && MK_MUTATE == 12
-        j = i;
+        j = i; /* planted fault: no bit reversal */
 #endif
         if (i < j) {
             double t = re[i];
@@ -64,7 +66,7 @@ static inline void mk_fft_ri(const mk_fft *p, double *re, double *im, int invers
         for (int i = 0; i < n; i += len)
             for (int k = 0; k < half; k++) {
 #if defined(MK_MUTATE) && MK_MUTATE == 11
-                double wr = p->c[k * step], wi = -p->s[k * step];
+                double wr = p->c[k * step], wi = -p->s[k * step]; /* planted fault: the inverse runs forward */
                 (void)inverse;
 #else
                 double wr = p->c[k * step], wi = inverse ? p->s[k * step] : -p->s[k * step];
@@ -83,7 +85,7 @@ static inline void mk_fft_c(const mk_fft *p, double complex *a, int inverse)
     for (int i = 0; i < n; i++) {
         int j = p->rev[i];
 #if defined(MK_MUTATE) && MK_MUTATE == 12
-        j = i;
+        j = i; /* planted fault: no bit reversal */
 #endif
         if (i < j) { double complex t = a[i]; a[i] = a[j], a[j] = t; }
     }
@@ -92,7 +94,7 @@ static inline void mk_fft_c(const mk_fft *p, double complex *a, int inverse)
         for (int i = 0; i < n; i += len)
             for (int k = 0; k < half; k++) {
 #if defined(MK_MUTATE) && MK_MUTATE == 11
-                double wr = p->c[k * step], wi = -p->s[k * step];
+                double wr = p->c[k * step], wi = -p->s[k * step]; /* planted fault: the inverse runs forward */
                 (void)inverse;
 #else
                 double wr = p->c[k * step], wi = inverse ? p->s[k * step] : -p->s[k * step];
@@ -107,7 +109,7 @@ static inline void mk_fft_c(const mk_fft *p, double complex *a, int inverse)
     }
 }
 
-/* 2-D on split storage, x fastest: re[j * n1 + i]. Columns go eight at a time through a gathered buffer (metal's wind.c).
+/* 2-D on split storage, x fastest: re[j * n1 + i]. Columns go eight at a time through a gathered buffer.
    0 or -1 (a size not a power of 2, or no memory). */
 static inline int mk_fft2_ri(double *re, double *im, int n1, int n2, int inverse)
 {
@@ -137,7 +139,8 @@ static inline int mk_fft3_c(double complex *a, int n1, int n2, int n3, int inver
 {
     int nn[3] = {n1, n2, n3}, mx = n1 > n2 ? n1 : n2;
     mx = mx > n3 ? mx : n3;
-    for (int ax = 0; ax < 3; ax++) if (nn[ax] < 1 || (nn[ax] & (nn[ax] - 1))) return -1; /* refuse before touching the data */
+    /* refuse before touching the data */
+    for (int ax = 0; ax < 3; ax++) if (nn[ax] < 1 || (nn[ax] & (nn[ax] - 1))) return -1;
     size_t stride[3] = {1, (size_t)n1, (size_t)n1 * n2};
     double complex *line = malloc(sizeof *line * (size_t)mx);
     if (!line) return -1;
@@ -187,11 +190,11 @@ static inline void mk_rfft_packed_(const mk_fft *half, double complex *X)
     }
 }
 
-/* Any length (1.5.6): a mixed-radix complex FFT, self-sorting (Stockham, decimation in frequency), for lengths such as 1080,
-   1920 and 3840 that the radix-2 plan refuses. The same signs as mk_fft (forward e^{-i}, neither direction normalized).
-   Radices 4, 2 and 3 by hand, any other prime factor by its direct sum, so a length with a large prime factor is slow but
-   right. mk_fftm_plan: n from 1 to 2^29; 0, or -1 (a bad n, no memory). mk_fftm_c: a[n] in place, work[n] scratch (a
-   caller's, so one plan serves many threads). */
+/* Any length (experimental): a mixed-radix complex FFT, self-sorting (Stockham, decimation in frequency), for lengths
+   such as 1080, 1920 and 3840 that the radix-2 plan refuses. The same signs as mk_fft (forward e^{-i}, neither
+   direction normalized). Radices 4, 2 and 3 by hand, any other prime factor by its direct sum, so a length with a large
+   prime factor is slow but right. mk_fftm_plan: n from 1 to 2^29; 0, or -1 (a bad n, no memory); mk_fftm_free releases
+   it. mk_fftm_c: a[n] in place, work[n] scratch (the caller's, so one plan serves many threads). */
 typedef struct {
     int n, nf, f[32]; /* the radices, in the order of the stages */
     double *c, *s;    /* cos and sin of 2 pi k / n, k < n */
@@ -228,7 +231,8 @@ static inline void mk_fftm_c(const mk_fftm *p, double complex *a, double complex
     for (int st = 0, l = n, s = 1; st < p->nf; st++) {
         const int r = p->f[st], m = l / r; /* l: the length of the transforms this stage splits; s: their stride */
         for (int j = 0; j < m; j++) {
-            double wr[4], wi[4]; /* the twiddles e^{sg 2 pi i j t / l}, t < 4; radix 5 and up read the table as they go */
+            /* the twiddles e^{sg 2 pi i j t / l}, t < 4; radix 5 and up read the table as they go */
+            double wr[4], wi[4];
             for (int t = 0; t < (r < 4 ? r : 4); t++) {
                 const long k = (long)j * t * s;
                 wr[t] = p->c[k], wi[t] = sg * p->s[k];
@@ -242,7 +246,7 @@ static inline void mk_fftm_c(const mk_fftm *p, double complex *a, double complex
                     const double pr = creal(a0) + creal(a2), pi = cimag(a0) + cimag(a2), mr = creal(a0) - creal(a2), mi = cimag(a0) - cimag(a2);
                     const double qr = creal(a1) + creal(a3), qi = cimag(a1) + cimag(a3), dr = creal(a1) - creal(a3), di = cimag(a1) - cimag(a3);
 #if defined(MK_MUTATE) && MK_MUTATE == 238
-                    const double e = -1; /* 238: the quarter turn always forward's */
+                    const double e = -1; /* planted fault: the quarter turn always the forward one */
 #else
                     const double e = sg;
 #endif
@@ -264,7 +268,8 @@ static inline void mk_fftm_c(const mk_fftm *p, double complex *a, double complex
                     const double complex a0 = in[q], a1 = in[q + sm], a2 = in[q + 2 * sm];
                     const double tr = creal(a1) + creal(a2), ti = cimag(a1) + cimag(a2);
 #if defined(MK_MUTATE) && MK_MUTATE == 239
-                    const double dr = sg * h3 * (creal(a2) - creal(a1)), di = sg * h3 * (cimag(a2) - cimag(a1)); /* 239: the difference turned */
+                    /* planted fault: the difference's sign turned */
+                    const double dr = sg * h3 * (creal(a2) - creal(a1)), di = sg * h3 * (cimag(a2) - cimag(a1));
 #else
                     const double dr = sg * h3 * (creal(a1) - creal(a2)), di = sg * h3 * (cimag(a1) - cimag(a2));
 #endif

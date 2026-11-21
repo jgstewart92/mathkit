@@ -1,3 +1,6 @@
+/* mk_ode.h: convergence orders of RK4, Verlet and BDF against exact solutions, Dormand-Prince tolerances, the stiff
+   Robertson and Van der Pol problems against published values, step-size edge cases, NaN right-hand sides, and steps
+   of a few ulps of t. */
 #include "../include/mk_ode.h"
 #include "t.h"
 #include <limits.h>
@@ -59,14 +62,14 @@ static void cos40(double t, const double *y, double *dy, void *ctx)
     if (cos_calls++ < 7 && t > cos_tmax) cos_tmax = t; /* the first step's seven calls */
     dy[0] = cos(40 * t);
 }
-/* review 2 (1.6.1): an f that turns NaN part-way */
+/* right-hand sides that turn NaN part-way: sqrt(1 - t) past t 1, -sqrt(y) below y 0, late on its second call */
 static void sqrt1t(double t, const double *y, double *dy, void *ctx) { (void)y, (void)ctx; dy[0] = sqrt(1 - t); }
 static void msqrt(double t, const double *y, double *dy, void *ctx) { (void)t, (void)ctx; dy[0] = -sqrt(y[0]); }
 static void halfj(double t, const double *y, double *J, void *ctx) { (void)t, (void)y, (void)ctx; J[0] = -0.5; }
 static int late_calls;
 static void late(double t, const double *y, double *dy, void *ctx) { (void)t, (void)ctx; dy[0] = late_calls++ ? NAN : -y[0] * y[0] * y[0]; }
 static void latej(double t, const double *y, double *J, void *ctx) { (void)t, (void)ctx; J[0] = -3 * y[0] * y[0]; }
-/* review 2 (1.6.2): two components, the NaN in the first; a step of a few ulps of t */
+/* the same with two components, the NaN in the first; dec05 for steps of a few ulps of t */
 static void sqrt1t2(double t, const double *y, double *dy, void *ctx) { (void)y, (void)ctx; dy[0] = sqrt(1 - t), dy[1] = 1; }
 static void msqrt2(double t, const double *y, double *dy, void *ctx) { (void)t, (void)ctx; dy[0] = -sqrt(y[0]), dy[1] = -y[1]; }
 static void halfj2(double t, const double *y, double *J, void *ctx) { (void)t, (void)y, (void)ctx; J[0] = -0.5, J[1] = J[2] = 0, J[3] = -1; }
@@ -110,7 +113,7 @@ int main(void)
         emax = fmax(emax, fabs(0.5 * (x * x + v * v) - 0.5));
     }
     CHECK(emax < 0.003, "Verlet, 100000 steps of 0.1 (1600 periods): energy error stays under %.3g of 0.5", emax);
-    /* Robertson's kinetics to t 40 (reference: Hairer and Wanner, Solving ODEs II) */
+    /* Robertson's kinetics to t 40 (reference values: Hairer and Wanner, Solving Ordinary Differential Equations II) */
     const double ref[3] = {0.7158270687193941, 9.185534764557338e-06, 0.2841637457401608};
     double ry[3] = {1, 0, 0}, rh = 0;
     mk_stiff_ctl sc = {1e-7, 1e-12, 0, 1, 0, 0, 0, 0, 0, 200000};
@@ -159,7 +162,7 @@ int main(void)
     }
     double be1 = fabs(by[0] - ref[0]) / ref[0], be3 = fabs(by[2] - ref[2]) / ref[2];
     CHECK(!bfail && be1 < 2e-3 && be3 < 5e-3, "BDF2, Robertson with steps growing 5 %% from 1e-6: %ld steps, relative errors %.2g %.2g, %ld Newton iterations", bsteps, be1, be3, nc2.iters);
-    { /* 1.0.5: the verification work's ode findings (Result 79) and the NaN times left to us */
+    { /* step-size edge cases: an hmax that divides the span, a NaN first step, NaN times, a negative n */
         int lbad = 0;
         double lworst = 0;
         for (int k = 2; k <= 50; k++) {
@@ -170,13 +173,13 @@ int main(void)
             if (r || r2) lbad++;
             lworst = fmax(lworst, fmax(fabs(y - 1), fabs(y2 - 1)));
         }
-        CHECK(lbad == 0 && lworst < 1e-14, "O-A: y' = 1 over [0, 1] with hmax 1/k, k 2..50: %d of 49 fail in Dormand-Prince or ode23s, y(1) off by %.2g", lbad, lworst);
+        CHECK(lbad == 0 && lworst < 1e-14, "y' = 1 over [0, 1] with hmax 1/k, k 2..50: %d of 49 fail in Dormand-Prince or ode23s, y(1) off by %.2g", lbad, lworst);
         double cy = 0, ch = NAN, cw[MK_DOPRI_WORK(1)];
         mk_dopri_ctl cc = {.rtol = 1e-6, .atol = 1e-9, .hmax = 0.01};
         cos_calls = 0, cos_tmax = 0;
         int cr = mk_dopri(cos40, NULL, 1, 0.0, &cy, 1.0, &ch, cw, &cc);
         CHECK(cr == 0 && cos_tmax <= 0.01 && fabs(cy - sin(40.0) / 40) < 1e-6,
-              "O-D: Dormand-Prince with *h NaN and hmax 0.01: the first step reaches t %.3g (at most 0.01), y(1) %.9f (%.9f)", cos_tmax, cy, sin(40.0) / 40);
+              "Dormand-Prince with *h NaN and hmax 0.01: the first step reaches t %.3g (at most 0.01), y(1) %.9f (%.9f)", cos_tmax, cy, sin(40.0) / 40);
         double ny = 1, nh = 0, nw[MK_DOPRI_WORK(1)], tnan[5] = {0};
         mk_dopri_ctl nc = {.rtol = 1e-6, .atol = 1e-9};
         mk_stiff_ctl ns = {.rtol = 1e-6, .atol = 1e-9, .autonomous = 1};
@@ -187,30 +190,28 @@ int main(void)
         int o5 = mk_bdf_step(decay, NULL, NULL, 1, 1, NAN, &ny, &yp, 0.1, 0, &nn), o6 = mk_bdf_step(decay, NULL, NULL, 1, 1, 0, &ny, &yp, NAN, 0, &nn);
         tnan[0] = (double)(nc.evals + ns.evals + nn.evals);
         CHECK(o1 == -1 && o2 == -1 && o3 == -1 && o4 == -1 && o5 == -1 && o6 == -1 && ny == 1 && tnan[0] == 0,
-              "O-C: a NaN t1 or t0 is refused (-1) by Dormand-Prince (%d %d) and ode23s (%d %d), a NaN t or h by BDF (%d %d), before f is called (%g calls)",
+              "a NaN t1 or t0 is refused (-1) by Dormand-Prince (%d %d) and ode23s (%d %d), a NaN t or h by BDF (%d %d), before f is called (%g calls)",
               o1, o2, o3, o4, o5, o6, tnan[0]);
-#ifndef T_OLD
         double by1[1] = {0}, bw1[16], bh1 = 0;
         mk_dopri_ctl bc = {.rtol = 1e-6, .atol = 1e-9};
-        CHECK(mk_dopri(one, NULL, -1, 0, by1, 1, &bh1, bw1, &bc) == -1, "O-B: Dormand-Prince refuses n = -1 (1.0.4 called memcpy with a negative size)");
-#endif
+        CHECK(mk_dopri(one, NULL, -1, 0, by1, 1, &bh1, bw1, &bc) == -1, "Dormand-Prince refuses n = -1 before any copy of a negative size");
     }
-    { /* the verification work O-E' (Result 86): maxsteps = LONG_MAX; 1.2.2 computed LONG_MAX + 1 only on its LONG_MAX-th step, so this row
-         passes there too: the overflow is out of a test's reach */
+    { /* maxsteps = LONG_MAX is accepted and both solvers run to the end. An overflow of the step counter could only
+         happen on the LONG_MAX-th step, out of any test's reach, so this row cannot catch one */
         double y1[1] = {1}, h1 = 0, w1[MK_DOPRI_WORK(1)], y2[1] = {1}, h2 = 0;
         mk_dopri_ctl c1 = {1e-9, 1e-12, 0, 0, 0, 0, LONG_MAX};
         mk_stiff_ctl c2 = {1e-6, 1e-9, 0, 0, 0, 0, 0, 0, 0, LONG_MAX};
         const int r1 = mk_dopri(gaussf, NULL, 1, 0, y1, 1, &h1, w1, &c1), r2 = mk_ode23s(gaussf, NULL, NULL, 1, 0, y2, 1, &h2, &c2);
-        CHECK(r1 == 0 && r2 == 0 && fabs(y1[0] - exp(-1)) < 1e-8 && fabs(y2[0] - exp(-1)) < 1e-4, "O-E': maxsteps LONG_MAX: both solvers run to the end (y %.9f, %.6f; e^-1 %.9f)", y1[0], y2[0], exp(-1));
+        CHECK(r1 == 0 && r2 == 0 && fabs(y1[0] - exp(-1)) < 1e-8 && fabs(y2[0] - exp(-1)) < 1e-4, "maxsteps LONG_MAX: both solvers run to the end (y %.9f, %.6f; e^-1 %.9f)", y1[0], y2[0], exp(-1));
     }
-    { /* 1.6.0, the review's O1: ode23s integrates forward only; 1.5.6 answered t1 < t0 with 0 and y unchanged */
+    { /* ode23s integrates forward only: t1 < t0 is refused with y unchanged; t1 = t0 returns 0 */
         double yb[1] = {1}, hb = 0, ye[1] = {1}, he = 0;
         mk_stiff_ctl cb = {.rtol = 1e-6, .atol = 1e-9}, ce = {.rtol = 1e-6, .atol = 1e-9};
         const int rb = mk_ode23s(gaussf, NULL, NULL, 1, 5, yb, 0, &hb, &cb), re = mk_ode23s(gaussf, NULL, NULL, 1, 5, ye, 5, &he, &ce);
-        CHECK(rb == -1 && yb[0] == 1 && re == 0 && ye[0] == 1, "O1 (review): ode23s from t 5 back to 0 is refused (%d), y as it was; t1 = t0 is 0 (%d)", rb, re);
+        CHECK(rb == -1 && yb[0] == 1 && re == 0 && ye[0] == 1, "ode23s from t 5 back to 0 is refused (%d), y as it was; t1 = t0 is 0 (%d)", rb, re);
     }
-    { /* review 2 #1 (1.6.1): the error norm kept a NaN out (fmax), so 1.6.0 took the NaN step: dopri and ode23s returned 0 with y NaN,
-         bdf_step called Newton converged */
+    { /* f NaN past a point: the error norm must keep the NaN (fmax drops it) so the step is not taken; dopri and ode23s
+         return -1 with y finite, and bdf_step returns -1 with y unchanged, never a converged Newton */
         double y[1] = {0}, h = 0, w[MK_DOPRI_WORK(1)], z[1] = {1}, hz = 0, b[1] = {1}, bp[1] = {1};
         mk_dopri_ctl c = {.rtol = 1e-8, .atol = 1e-10};
         mk_stiff_ctl s = {.rtol = 1e-6, .atol = 1e-9, .autonomous = 1};
@@ -219,10 +220,11 @@ int main(void)
         late_calls = 0;
         const int rb = mk_bdf_step(late, latej, NULL, 1, 1, 0, b, bp, 0.5, 0, &nc);
         CHECK(rd == -1 && fabs(y[0] - 2.0 / 3) < 1e-6 && rs == -1 && z[0] >= 0 && z[0] < 1e-6 && rb == -1 && b[0] == 1,
-              "review 2 #1: f NaN past a point: dopri on sqrt(1 - t) to 2 is %d at y %.9f (2/3), ode23s on -sqrt(y) to 3 is %d at y %.3g; bdf_step with f NaN on its second call %d, y %g as it was",
+              "f NaN past a point: dopri on sqrt(1 - t) to 2 is %d at y %.9f (2/3), ode23s on -sqrt(y) to 3 is %d at y %.3g; bdf_step with f NaN on its second call %d, y %g as it was",
               rd, y[0], rs, z[0], rb, b[0]);
     }
-    { /* review 2 #8 (1.6.1): each step is (t + s) - t, the one t can take; 1.6.0 moved y by s where t's ulp rounded the step */
+    { /* each step is (t + s) - t, the one t can take, so y moves by the span t moved even where t's ulp rounds the
+         step */
         double ya[1] = {0}, yb[1] = {0}, yc[1] = {1}, ha = 0, hb = 0, hc = 0, w[MK_DOPRI_WORK(1)], za[1] = {0}, hz = 0;
         mk_dopri_ctl ca = {.rtol = 1e-8, .atol = 1e-12}, cb = ca, cc = ca;
         mk_stiff_ctl s = {.rtol = 1e-6, .atol = 1e-12, .autonomous = 1};
@@ -230,10 +232,10 @@ int main(void)
         const int ra = mk_dopri(one, NULL, 1, t0, ya, t1, &ha, w, &ca), rz = mk_ode23s(one, NULL, NULL, 1, t0, za, t1, &hz, &s);
         const int rb = mk_dopri(one, NULL, 1, 1e17, yb, 1e17 + 1000, &hb, w, &cb), rc = mk_dopri(decay, NULL, 1, 1e17, yc, 1e17 + 1000, &hc, w, &cc);
         CHECK(ra == 0 && fabs(ya[0] - span) <= 1e-14 * span && rz == 0 && fabs(za[0] - span) <= 1e-14 * span && rb == 0 && fabs(yb[0] - 992) <= 1e-12 && rc == -1 && yc[0] == 1,
-              "review 2 #8: y' = 1 from t 1.7e9 over 0.01: dopri %d, y off the span by %.2g of it, ode23s %d, %.2g; from 1e17 over 1000 (ulp 16, span 992): %d, y %.17g; y' = -y there refused (%d, y %g)",
+              "steps that t can take: y' = 1 from t 1.7e9 over 0.01: dopri %d, y off the span by %.2g of it, ode23s %d, %.2g; from 1e17 over 1000 (ulp 16, span 992): %d, y %.17g; y' = -y there refused (%d, y %g)",
               ra, fabs(ya[0] - span) / span, rz, fabs(za[0] - span) / span, rb, yb[0], rc, yc[0]);
     }
-    { /* review 2 #1 again (1.6.2): 1.6.1's max kept a NaN only in the last component, so dopri took the step with y[0] NaN (0) */
+    { /* the same with n 2 and the NaN in component 0: the norm keeps a NaN in any component, not only the last */
         double y[2] = {0, 0}, h = 0, w[MK_DOPRI_WORK(2)], z[2] = {1, 1}, hz = 0, b[2] = {1, 1}, bp[2] = {1, 1};
         mk_dopri_ctl c = {.rtol = 1e-8, .atol = 1e-10};
         mk_stiff_ctl s = {.rtol = 1e-6, .atol = 1e-9, .autonomous = 1};
@@ -242,12 +244,13 @@ int main(void)
         late_calls = 0;
         const int rb = mk_bdf_step(late2, late2j, NULL, 2, 1, 0, b, bp, 0.5, 0, &nc);
         CHECK(rd == -1 && fabs(y[0] - 2.0 / 3) < 1e-6 && fabs(y[1] - 1) < 1e-6 && rs == -1 && z[0] >= 0 && z[0] < 1e-6 && rb == -1 && b[0] == 1 && b[1] == 1,
-              "review 2 #1, n 2 with the NaN in component 0: dopri on (sqrt(1 - t), 1) to 2 is %d at y (%.9f, %.9f); ode23s %d at y0 %.3g; bdf_step %d, y (%g, %g) as it was",
+              "f NaN past a point, n 2 with the NaN in component 0: dopri on (sqrt(1 - t), 1) to 2 is %d at y (%.9f, %.9f); ode23s %d at y0 %.3g; bdf_step %d, y (%g, %g) as it was",
               rd, y[0], y[1], rs, z[0], rb, b[0], b[1]);
     }
-    { /* review 2 A1 (1.6.2): after a rejection the snapped step rounded back up to the step rejected, so 1.6.1 retried it to maxsteps:
-         y' = -0.05 y from t 1e17 (ulp 16) over 992. dopri at rtol 1e-2 stuck at 32 (1.6.1), now finishes; at rtol 1e-4 the step needed is
-         under t's resolution: -1 at once. ode23s with W = 1 - 16 d J exactly 0 (its LU refused) from t0 1e17 + 16, whose t + 8 ties up to 16 */
+    { /* steps of a few ulps of t: after a rejection the shrunk step must not round back up to the one rejected and
+         repeat to maxsteps. y' = -0.05 y from t 1e17 (ulp 16) over 992: dopri at rtol 1e-2 finishes; at rtol 1e-4 the
+         step needed is under t's resolution, so -1 at once. ode23s with W = 1 - 16 d J exactly 0 (its LU refused),
+         from t0 1e17 + 16, where t + 8 ties up to 16 */
         const double t0 = 1e17, t1 = t0 + 992, d = 1 / (2 + sqrt(2.0));
         double ya[1] = {1}, yb[1] = {1}, yc[1] = {1}, ha = 0, hb = 0, hc = 16, w[MK_DOPRI_WORK(1)];
         mk_dopri_ctl ca = {.rtol = 1e-2, .atol = 1e-12, .maxsteps = 100000}, cb = {.rtol = 1e-4, .atol = 1e-12, .maxsteps = 100000};
@@ -258,7 +261,7 @@ int main(void)
         for (int k = 0; k < 64 && -16 * d * lin_k + 1 != 0; k++) lin_k = nextafter(lin_k, -16 * d * lin_k + 1 > 0 ? INFINITY : 0);
         const int rc = mk_ode23s(dec05, dec05j, NULL, 1, t0 + 16, yc, t1 + 16, &hc, &s);
         CHECK(ra == 0 && fabs(ya[0]) < 1e-11 && ca.rejected < 100 && rb == -1 && cb.rejected < 100 && -16 * d * lin_k + 1 == 0 && rc == -1 && s.rejected < 10,
-              "review 2 A1: steps of a few ulps of t 1e17: dopri at rtol 1e-2 %d (y %.2g, e^-49.6 = 2.9e-22, %ld rejected), at 1e-4 %d after %ld rejections; ode23s with its LU refused at 16: %d after %ld",
+              "steps of a few ulps of t 1e17: dopri at rtol 1e-2 %d (y %.2g, e^-49.6 = 2.9e-22, %ld rejected), at 1e-4 %d after %ld rejections; ode23s with its LU refused at 16: %d after %ld",
               ra, ya[0], ca.rejected, rb, cb.rejected, rc, s.rejected);
     }
     return wrong;

@@ -1,3 +1,5 @@
+/* mk_vec.h: quaternion and transform identities on 1000 random rotations, integration at a constant rate against the
+   exact turn, normalization across the exponent range, NaN propagation, mk_lerp at its ends, and the version string. */
 #include "../include/mk_vec.h"
 #include "../include/mk_version.h"
 #include <string.h>
@@ -41,34 +43,35 @@ int main(void)
     CHECK(ie < 1e-12, "1000 steps at constant omega equal one turn of omega t (error %.2g)", ie);
     CHECK(mk_v3_len(mk_v3_norm(mk_v3_make(0, 0, 0))) == 0, "the unit vector of zero is zero, not NaN");
     CHECK(strcmp(MK_VERSION, "1.6.2") == 0, "mathkit version %s", MK_VERSION);
-    { /* 1.6.0, the review's Q1 */
+    { /* a zero axis gives the identity */
         mk_quat z = mk_q_axis_angle(mk_v3_make(0, 0, 0), 1);
-        CHECK(z.w == 1 && z.x == 0 && z.y == 0 && z.z == 0, "Q1 (review): a zero axis gives the identity (got %g, %g, %g, %g)", z.w, z.x, z.y, z.z);
+        CHECK(z.w == 1 && z.x == 0 && z.y == 0 && z.z == 0, "a zero axis gives the identity (got %g, %g, %g, %g)", z.w, z.x, z.y, z.z);
     }
-    { /* 1.2.2: the verification work Result 84, V1 and V2 */
+    { /* normalization without overflow or underflow: (3, 4, 0) x 2^e, e from -1070 to 1020; a quaternion near 1e-170 */
         int ok = 1;
         for (int e = -1070; e <= 1020; e += 10) {
             mk_v3 u = mk_v3_norm((mk_v3){3 * ldexp(1, e), 4 * ldexp(1, e), 0});
             ok &= fabs(u.x - 0.6) < 1e-15 && fabs(u.y - 0.8) < 1e-15 && u.z == 0;
         }
-        CHECK(ok, "V1: v3_norm of (3, 4, 0) x 2^e is (0.6, 0.8, 0) for e from -1070 to 1020");
+        CHECK(ok, "v3_norm of (3, 4, 0) x 2^e is (0.6, 0.8, 0) for e from -1070 to 1020");
         mk_quat q = mk_q_norm((mk_quat){1e-170, 1e-170, 0, 0});
-        CHECK(fabs(q.w - sqrt(0.5)) < 1e-15 && fabs(q.x - sqrt(0.5)) < 1e-15, "V2: q_norm of a quaternion near 1e-170 keeps its direction (w %g, x %g)", q.w, q.x);
+        CHECK(fabs(q.w - sqrt(0.5)) < 1e-15 && fabs(q.x - sqrt(0.5)) < 1e-15, "q_norm of a quaternion near 1e-170 keeps its direction (w %g, x %g)", q.w, q.x);
     }
-    { /* review 2 #4 (1.6.1): a NaN quaternion or rate normalized to the identity, so a diverged attitude read as level (1.6.0) */
+    { /* a NaN quaternion, rate or matrix entry stays NaN, so a diverged attitude never reads as level; zero normalizes
+         to the identity */
         const mk_quat q = mk_q_axis_angle((mk_v3){0, 0, 1}, 0.7), a = mk_q_norm((mk_quat){NAN, 0, 0, 0}), b = mk_q_integrate(q, (mk_v3){NAN, 0, 0}, 0.01);
         const double R[3][3] = {{NAN, 0, 0}, {0, 1, 0}, {0, 0, 1}};
         const mk_quat c = mk_q_from_mat(R), z = mk_q_norm((mk_quat){0, 0, 0, 0});
-        CHECK(isnan(a.w) && isnan(b.w) && isnan(c.w) && z.w == 1 && z.x == 0, "review 2 #4: q_norm(NaN, 0, 0, 0) w %g, q_integrate with a NaN rate w %g, q_from_mat with a NaN entry w %g; zero still the identity (%g)",
+        CHECK(isnan(a.w) && isnan(b.w) && isnan(c.w) && z.w == 1 && z.x == 0, "q_norm(NaN, 0, 0, 0) w %g, q_integrate with a NaN rate w %g, q_from_mat with a NaN entry w %g; zero still the identity (%g)",
               a.w, b.w, c.w, z.w);
     }
-    { /* review 2 A3 (1.6.2): a zero axis with a NaN angle gave the identity (the NaN-in, level-out case #4 removed elsewhere) */
+    { /* a zero axis with a NaN or infinite angle gives NaN, not the identity */
         const mk_quat a = mk_q_axis_angle((mk_v3){0, 0, 0}, NAN), b = mk_q_axis_angle((mk_v3){0, 0, 0}, INFINITY), c = mk_q_axis_angle((mk_v3){0, 0, 0}, 0.7);
-        CHECK(isnan(a.w) && isnan(b.w) && c.w == 1 && c.x == 0, "review 2 A3: q_axis_angle about a zero axis: angle NaN w %g, inf w %g; 0.7 still the identity (w %g)", a.w, b.w, c.w);
+        CHECK(isnan(a.w) && isnan(b.w) && c.w == 1 && c.x == 0, "q_axis_angle about a zero axis: angle NaN w %g, inf w %g; 0.7 still the identity (w %g)", a.w, b.w, c.w);
     }
-    { /* review 2 A4 (1.6.2): mk_lerp at t 0 beside an infinite b was (1 - 0) a + 0 inf, NaN, so mk_linear_eval at a node next to an inf gave NaN */
+    { /* mk_lerp gives exactly a at t 0 and b at t 1, even beside an infinite end ((1 - t) a + t b gives 0 inf = NaN) */
         const double a = mk_lerp(1, INFINITY, 0), b = mk_lerp(1, -INFINITY, 0), c = mk_lerp(-0.0, 1, 0), d = mk_lerp(1, INFINITY, 1);
-        CHECK(a == 1 && b == 1 && c == 0 && signbit(c) && d == INFINITY, "review 2 A4: lerp(1, inf, 0) %g, lerp(1, -inf, 0) %g, lerp(-0, 1, 0) %g (exactly a), lerp(1, inf, 1) %g", a, b,
+        CHECK(a == 1 && b == 1 && c == 0 && signbit(c) && d == INFINITY, "lerp(1, inf, 0) %g, lerp(1, -inf, 0) %g, lerp(-0, 1, 0) %g (exactly a), lerp(1, inf, 1) %g", a, b,
               c, d);
     }
     return wrong;

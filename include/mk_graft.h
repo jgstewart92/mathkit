@@ -1,28 +1,30 @@
-/* mathkit: a closed mesh changed only near a seam, the rest of it kept triangle for triangle. mesher-fable's bonegraft (2026-11-15):
-   a field's surface by marching tetrahedra on a box of nodes, cut at a seam function's zero, stitched into the mesh cut at the same
-   zero, its rim put into the mesh's rim and welded. The bone-specific field (bones grown, opened, blurred and blended into the
-   muscle's own distance) stays with its owner; the field is the caller's, on mk_sdf's grid layout (a grid from mk_sdf_mesh fits,
-   and so does any field built from one; mk_sdf_mesh_box grids only the seam's neighbourhood, 1.5.2).
-   mk_mtet: marching tetrahedra, Freudenthal's six tetrahedra a cube round its diagonal, the same in every cube, so neighbours'
-   faces match and the surface is a closed manifold inside the box whatever the field (surface nets, mk_snet, can touch themselves
-   where two sheets share a cell); a vertex on each node pair of unlike sign at the linear crossing held between 0.1 and 0.9 of the
-   edge (no needles from a crossing at a node); wound outward, the field negative inside.
-   A graft: mk_graft_init(S, psi) takes the untouched closed mesh and the seam function psi (negative where the patch goes; zero at
-   the seam), psi at S's vertices (nudged off zero by `nudge`, so the zero line misses them), linear over S's triangles.
-   mk_graft_patch(field) is the field's surface kept where psi < 0, cut on its edges at psi = 0 (bisected on the patch's psi: S's
-   linear psi at the closest point of S within `near` of it, psi itself farther off). The caller may thin the patch (mk_decimate on
-   an open surface keeps its rim on its rim). Unthinned it still stitches closed (1.5.2), but its small rim triangles follow the
-   field's ripple about S's plane and can cross S's rim triangles (t_graft's dent, by meshcheck: 4 crossing pairs, 34 on a coarse
-   S; thinned, none): thin it where crossings matter. mk_graft_stitch(patch) cuts S at psi = 0 (S kept where psi > 0,
-   its crossing triangles cut on their edges), moves each patch rim vertex onto S's cut rim (no more than `snap`, or it refuses;
-   one whose closest point lies within 1 % of an S rim edge's length of its end goes on to that S vertex, uncounted in snap and
-   rep->snap),
-   pairs the rims as loops (each patch rim loop on one of S's, each of S's met by one, else counted), merges the patch rim vertices
-   whose places on S's rim fall out of order into a rim neighbour (1.5.2), puts each rim's vertices into the other's rim edges (the
-   rim triangles fanned, S's in their own planes), welds, and keeps the piece of most volume, either sign (closed specks the cut
-   left off are dropped and counted; pieces wound against S are reported, 1.5.2). out->keep marks for mk_decimate: 1 S's own
-   vertices, 3 its cut points, 2 the patch's rim, 0 the rest. Header only, C23.
-   Experimental (1.6.0): not frozen with the numerical core; its results may still change between releases. */
+/* mathkit: a closed mesh changed only near a seam, the rest of it kept triangle for triangle. Header only, C23.
+   A field's surface, by marching tetrahedra on a box of nodes, is cut at a seam function's zero and stitched into the
+   mesh cut at the same zero: its rim is put into the mesh's rim and welded. The field is the caller's, on mk_sdf's grid
+   layout (a grid from mk_sdf_mesh fits, and so does any field built from one; mk_sdf_mesh_box grids only the seam's
+   neighbourhood).
+   mk_mtet: marching tetrahedra, Freudenthal's six tetrahedra per cube round its diagonal, the same in every cube, so
+   neighbours' faces match and the surface is a closed manifold inside the box whatever the field (surface nets,
+   mk_snet, can touch themselves where two sheets share a cell); a vertex on each node pair of unlike sign at the linear
+   crossing, held between 0.1 and 0.9 of the edge (no needles from a crossing at a node); wound outward, the field
+   negative inside.
+   A graft: mk_graft_init(S, psi) takes the untouched closed mesh S and the seam function psi (negative where the patch
+   goes, zero at the seam): psi at S's vertices (nudged off zero by `nudge`, so the zero line misses them), linear over
+   S's triangles. mk_graft_refine can first split S's long edges near the seam. mk_graft_patch(field) is the field's
+   surface kept where psi < 0, cut on its edges at psi = 0 (bisected on the patch's psi: S's linear psi at the closest
+   point of S within `near` of it, psi itself farther off). The caller may thin the patch (mk_decimate on an open
+   surface keeps its rim on its rim). Unthinned it still stitches closed, but its small rim triangles follow the field's
+   ripple about S's plane and can cross S's rim triangles (t_graft's dent: 4 crossing pairs, 34 on a coarse S; none once
+   thinned): thin it where crossings matter.
+   mk_graft_stitch(patch) cuts S at psi = 0 (S kept where psi > 0, its crossing triangles cut on their edges), moves
+   each patch rim vertex onto S's cut rim (no more than `snap`, or it refuses; one whose closest point lies within 1 %
+   of an S rim edge's length of its end goes onto that S vertex, the extra move not counted against snap or in
+   rep->snap), pairs the rims as loops (each patch rim loop on one of S's, each of S's met by one, else counted), merges
+   the patch rim vertices whose places on S's rim fall out of order into a rim neighbour, puts each rim's vertices into
+   the other's rim edges (the rim triangles fanned, S's in their own planes), welds, and keeps the piece of most volume,
+   either sign (closed specks the cut left off are dropped and counted; pieces wound against S are reported). out->keep
+   marks for mk_decimate: 1 S's own vertices, 3 its cut points, 2 the patch's rim, 0 the rest.
+   Experimental: its results may change between releases. Single-threaded. */
 #ifndef MK_GRAFT_H
 #define MK_GRAFT_H
 #include "mk_geom.h"
@@ -32,7 +34,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { double *V; int *T; int nv, nt; unsigned char *keep; } mk_gmesh; /* malloc'd; keep may be NULL */
+/* a mesh handed back: V[3 nv], T[3 nt], keep[nv] (may be NULL), all malloc'd; free with mk_gmesh_free */
+typedef struct { double *V; int *T; int nv, nt; unsigned char *keep; } mk_gmesh;
 static inline void mk_gmesh_free(mk_gmesh *m) { free(m->V), free(m->T), free(m->keep), memset(m, 0, sizeof *m); }
 
 /* a growing surface with rim edges (a, b, its triangle) */
@@ -78,9 +81,10 @@ static inline int mk_gmap_init_(mk_gmap_ *m, size_t want)
     while (m->n < 2 * want + 16 && m->n < ((size_t)1 << 40)) m->n *= 2;
     m->k = malloc(m->n * sizeof *m->k), m->v = malloc(m->n * sizeof *m->v);
 #if defined(MK_MUTATE) && MK_MUTATE == 233
-    if (!m->k || !m->v) { free(m->k), free(m->v); return -1; } /* 233: the pointers left set (1.5.3) */
+    if (!m->k || !m->v) { free(m->k), free(m->v); return -1; } /* 233: the pointers left set */
 #else
-    if (!m->k || !m->v) { free(m->k), free(m->v), m->k = NULL, m->v = NULL; return -1; } /* the callers free them again on failure */
+    /* cleared, because the callers free them again on failure */
+    if (!m->k || !m->v) { free(m->k), free(m->v), m->k = NULL, m->v = NULL; return -1; }
 #endif
     for (size_t i = 0; i < m->n; i++) m->k[i] = UINT64_MAX;
     return 0;
@@ -93,23 +97,25 @@ static inline size_t mk_gmap_slot_(const mk_gmap_ *m, uint64_t key)
 }
 
 #if defined(MK_MUTATE) && MK_MUTATE == 232
-#define MK_GRAFT_BISECT_(t_, ta_, tb_) /* 232: no bisection, so a psi of +inf gives NaN cut points (1.5.3) */
+#define MK_GRAFT_BISECT_(t_, ta_, tb_) /* 232: no bisection, so a psi of +inf gives NaN cut points */
 #else
 #define MK_GRAFT_BISECT_(t_, ta_, tb_) if (!(t_ >= ta_ && t_ <= tb_)) t_ = 0.5 * (ta_ + tb_);
 #endif
-/* the field F's surface by marching tetrahedra: nodes lo + h (i, j, k), index (k n1 + j) n0 + i (mk_sdf's layout), negative inside.
-   Out: V, T malloc'd (closed and outward inside the box). 0, or -1 for a size under 2, more nodes than fit, h not positive and
-   finite, a non-finite lo or far corner lo + (n - 1) h, or no memory (out then empty). A NaN node counts as outside. */
+/* The field F's surface by marching tetrahedra: nodes lo + h (i, j, k), index (k n1 + j) n0 + i (mk_sdf's layout),
+   negative inside. Out: out->V, out->T malloc'd (closed and outward inside the box; keep NULL). Returns 0, or -1 for a
+   size under 2, more nodes than fit, h not positive and finite, a non-finite lo or far corner lo + (n - 1) h, or no
+   memory (out then empty). A NaN node counts as outside. */
 static inline int mk_mtet(const float *F, const int n[3], const double lo[3], double h, mk_gmesh *out)
 {
     memset(out, 0, sizeof *out);
 #if defined(MK_MUTATE) && MK_MUTATE == 230
-    if (!F || n[0] < 2 || n[1] < 2 || n[2] < 2 || !(h > 0) || !isfinite(h) || !isfinite(lo[0] + lo[1] + lo[2])) return -1; /* 230: a finite lo's sum can overflow (1.5.3) */
+    /* 230: a finite lo's sum can overflow */
+    if (!F || n[0] < 2 || n[1] < 2 || n[2] < 2 || !(h > 0) || !isfinite(h) || !isfinite(lo[0] + lo[1] + lo[2])) return -1;
 #else
     if (!F || n[0] < 2 || n[1] < 2 || n[2] < 2 || !(h > 0) || !isfinite(h) || !isfinite(lo[0]) || !isfinite(lo[1]) || !isfinite(lo[2])) return -1;
 #endif
     if ((size_t)n[0] > (size_t)INT_MAX / (size_t)n[1] / (size_t)n[2] || (size_t)n[0] * n[1] * n[2] > SIZE_MAX / 64) return -1;
-#if !(defined(MK_MUTATE) && MK_MUTATE == 231) /* 231: the far corner not looked at (1.5.3) */
+#if !(defined(MK_MUTATE) && MK_MUTATE == 231) /* 231: the far corner not looked at */
     for (int a = 0; a < 3; a++)
         if (!isfinite(lo[a] + (n[a] - 1) * h)) return -1; /* the far corner: every vertex lies between lo and it */
 #endif
@@ -146,7 +152,7 @@ static inline int mk_mtet(const float *F, const int n[3], const double lo[3], do
                                 if (!in[x] && in[y]) inv++;
                         const int s = PSGN[p] * (inv & 1 ? -1 : 1);
 #if defined(MK_MUTATE) && MK_MUTATE == 181
-                        const int sw = -s; /* every triangle wound inward */
+                        const int sw = -s; /* 181: every triangle wound inward */
 #else
                         const int sw = s;
 #endif
@@ -210,15 +216,17 @@ typedef struct {
 } mk_graft;
 typedef struct {
     int patch_nv, patch_nt, rim_s, rim_p; /* the patch kept; the rim edges of S's cut and of the patch */
-    long inserted, welded, fanned, dropped, split; /* patch rim vertices put into S's rim edges, landed on its vertices; rim triangles */
+    /* patch rim vertices put into S's rim edges, and landed on S's vertices; patch rim triangles fanned, dropped (both
+       ends on one point), and split at their centre (two rim edges) */
+    long inserted, welded, fanned, dropped, split;
     double snap;                         /* the largest move of a patch rim vertex onto S's rim */
     int pieces;                          /* closed pieces before the specks were dropped */
     double dropped_vol, vol0, vol1;      /* their volume; S's volume before and the result's after */
-    long dup, lone;                      /* directed edges used twice; without their reverse (both 0 for a closed manifold) */
-    int loops_s, loops_p, unpaired;      /* 1.5.2: the rim loops of S's cut and of the patch; loops without a partner (-1: not loops) */
-    long merged;                         /* 1.5.2: patch rim vertices merged into a rim neighbour, their place on S's rim out of order */
-    int inverted;                        /* 1.5.2: pieces wound against S (their volume of the other sign), the kept one included */
-    double inverted_vol;                 /* 1.5.2: their volume, summed (of the other sign) */
+    long dup, lone;                      /* directed edges used twice; without a reverse (both 0 if closed manifold) */
+    int loops_s, loops_p, unpaired;      /* rim loops of S's cut and of the patch; unpaired loops (-1: not loops) */
+    long merged;                         /* patch rim vertices merged into a neighbour, being out of order on S's rim */
+    int inverted;                        /* pieces wound against S (volume of the other sign), the kept one included */
+    double inverted_vol;                 /* their volume, summed (of the other sign) */
 } mk_graft_report;
 
 static inline void mk_graft_free(mk_graft *g) { mk_bvh_free(&g->bv), free(g->psi), memset(g, 0, sizeof *g); }
@@ -228,22 +236,22 @@ static inline int mk_graft_ekcmp_(const void *a, const void *b)
     const long long x = ((const mk_graft_ekey_ *)a)->k, y = ((const mk_graft_ekey_ *)b)->k;
     return (x > y) - (x < y);
 }
-/* 1.5.2 (the maintainer's race-c1 H3 roomsplit refine): S refined where the seam will cut it, before mk_graft_init: every edge longer
-   than lmax whose ends' psi reach below band and above -band is split at its midpoint, in both its triangles (1, 2 or 3 split
-   edges a triangle by the usual templates, two split edges on the quad's shorter diagonal, so no T-junction), passes until none
-   is left or 12 have run. The surface is unchanged (midpoints of flat triangles' edges); only the seam's rim gets as fine as a
-   patch's, which a coarse S's long rim edges are not (the maintainer's H3 on 157 muscles, refining as a retry: 200 of 330 rows took,
-   184 without). out: the refined mesh (V, T malloc'd, keep NULL; S's vertices first, as they were). The passes run, or -1 for
-   a bad mesh, a NULL fn, lmax or band not positive and finite, or no memory (out then empty). */
+/* S refined where the seam will cut it, before mk_graft_init: every edge longer than lmax whose ends' psi reach below
+   band and above -band is split at its midpoint, in both its triangles (1, 2 or 3 split edges a triangle by the usual
+   templates, two split edges on the quad's shorter diagonal, so no T-junction), in passes until none is left or 12 have
+   run. The surface is unchanged (midpoints of flat triangles' edges); only the seam's rim gets as fine as a patch's,
+   which a coarse S's long rim edges are not. out: the refined mesh (V, T malloc'd, keep NULL; S's vertices first, as
+   they were). Returns the passes run, or -1 for a bad mesh, a NULL fn, lmax or band not positive and finite, or no
+   memory (out then empty). */
 static inline int mk_graft_refine(const double *V, int nv, const int *T, int nt, mk_graft_psi fn, void *ctx, double lmax, double band, mk_gmesh *out)
 {
     memset(out, 0, sizeof *out);
     if (!V || !T || !fn || nv < 3 || nt < 1 || nv > INT_MAX / 4 || nt > INT_MAX / 8 || !(lmax > 0) || !isfinite(lmax) || !(band > 0) || !isfinite(band)) return -1;
     for (size_t q = 0; q < 3 * (size_t)nt; q++)
         if (T[q] < 0 || T[q] >= nv) return -1;
-#if !(defined(MK_MUTATE) && MK_MUTATE == 234) /* 234: coordinates not looked at (1.5.3) */
+#if !(defined(MK_MUTATE) && MK_MUTATE == 234) /* 234: coordinates not looked at */
     for (size_t q = 0; q < 3 * (size_t)nv; q++)
-        if (!isfinite(V[q])) return -1; /* a bad mesh, as mk_graft_init's (the verification work R-1: NaN or inf passed into the midpoints) */
+        if (!isfinite(V[q])) return -1; /* a bad mesh, as for mk_graft_init: NaN or inf would reach the midpoints */
 #endif
     int mv = nv, mt = nt, pass = 0, *mT = malloc(3 * (size_t)nt * sizeof *mT);
     double *mV = malloc(3 * (size_t)nv * sizeof *mV), *ps = malloc((size_t)nv * sizeof *ps);
@@ -292,7 +300,7 @@ static inline int mk_graft_refine(const double *V, int nv, const int *T, int nt,
                 mid[k] = f ? f->m : -1, ns += f != NULL;
             }
 #if defined(MK_MUTATE) && MK_MUTATE == 209
-            if (ns == 1) ns = 0; /* a triangle with one split edge left whole: a T-junction (the 1-split template left out) */
+            if (ns == 1) ns = 0; /* 209: a triangle with one split edge left whole: a T-junction */
 #endif
             if (!ns) MK_GR_TRI_(v[0], v[1], v[2]);
             else if (ns == 3) MK_GR_TRI_(v[0], mid[0], mid[2]), MK_GR_TRI_(v[1], mid[1], mid[0]), MK_GR_TRI_(v[2], mid[2], mid[1]), MK_GR_TRI_(mid[0], mid[1], mid[2]);
@@ -321,8 +329,9 @@ fail:
     free(mT), free(mV), free(ps), free(E);
     return -1;
 }
-/* S (closed, V[3 nv], T[3 nt]; kept by pointer, so it must outlive g) and the seam function. 0, or -1 for a bad mesh, a NULL fn,
-   near or nudge negative or not finite, or no memory. */
+/* Sets up g for S (closed, V[3 nv], T[3 nt]; kept by pointer, so it must outlive g) and the seam function fn(p, ctx); a
+   psi not finite at a vertex reads as 1. Free g with mk_graft_free. Returns 0, or -1 for a bad mesh, a NULL fn, near or
+   nudge negative or not finite, or no memory. */
 static inline int mk_graft_init(mk_graft *g, const double *V, int nv, const int *T, int nt, mk_graft_psi fn, void *ctx, double near, double nudge)
 {
     memset(g, 0, sizeof *g);
@@ -353,8 +362,8 @@ static inline double mk_graft_psi_p_(const mk_graft *g, const double *p)
     mk_closest_pt_tri(p, g->V + 3 * (size_t)f[0], g->V + 3 * (size_t)f[1], g->V + 3 * (size_t)f[2], w, q);
     return w[0] * g->psi[f[0]] + w[1] * g->psi[f[1]] + w[2] * g->psi[f[2]];
 }
-/* a surface cut at psi = 0, the side sgn psi > 0 kept: the kept vertices (map), then the cut points; rim edges a -> b with their
-   triangle. g NULL: the cut points linear in psi; else bisected on the patch's psi (8 steps). */
+/* a surface cut at psi = 0, the side sgn psi > 0 kept: the kept vertices (map), then the cut points; rim edges a -> b
+   with their triangle. g NULL: the cut points linear in psi; else bisected on the patch's psi (8 steps). */
 static inline int mk_graft_clip_(const double *V, int nv, const int *T, int nt, const double *psi, double sgn, const mk_graft *g, mk_gcut_ *c)
 {
     memset(c, 0, sizeof *c);
@@ -429,7 +438,8 @@ fail:
     free(M.k), free(M.v), free(use), mk_gcut_free_(c);
     return -1;
 }
-/* the field's surface (mk_mtet) kept where psi < 0, an open patch: out->keep 1 on its rim. 0, or -1 as mk_mtet, or no memory. */
+/* The field's surface (mk_mtet) kept where psi < 0, an open patch: out->keep 1 on its rim; free with mk_gmesh_free.
+   Returns 0, or -1 as mk_mtet, for a g not set up, or for no memory. */
 static inline int mk_graft_patch(const mk_graft *g, const float *F, const int n[3], const double lo[3], double h, mk_gmesh *out)
 {
     memset(out, 0, sizeof *out);
@@ -467,14 +477,15 @@ static inline int mk_graft_find_(int *pr, int x)
     while (pr[x] != x) x = pr[x] = pr[pr[x]];
     return x;
 }
-/* S cut at psi = 0 with the patch (PV[3 pnv], PT[3 pnt]: open, its rim on the seam) stitched in. out: the result, keep as above.
-   0; -1 for a bad patch, no memory, S's cut rim not closed loops, a patch rim vertex farther than snap from S's rim (or merged
-   farther than snap from its rim neighbour), a rim that does not follow S's, or snap negative or not finite; 1 when the result
-   is not a closed manifold (rep->dup, rep->lone; a vertex pinched between two fans, as from a pinched patch, is not looked
-   for: the verification work G-6), 2 when it is one but wound against S (its volume of the other sign), or when
-   pieces wound against S hold over 1 % of its volume (rep->inverted, inverted_vol: part of the body turned inside out by the
-   stitch); out is still given with 1 and 2. rep is filled on -1 too, as far as the stitch got;
-   rep->loops_s, loops_p and unpaired say how the rims paired up (unpaired -1: not simple loops). */
+/* S cut at psi = 0 with the patch (PV[3 pnv], PT[3 pnt]: open, its rim on the seam) stitched in. out: the result, keep
+   as above; free with mk_gmesh_free. Returns 0; -1 for a bad patch, no memory, S's cut rim not closed loops, a patch
+   rim vertex farther than snap from S's rim (or merged farther than snap from its rim neighbour), a rim that does not
+   follow S's, or snap negative or not finite; 1 when the result is not a closed manifold (rep->dup, rep->lone; a vertex
+   pinched between two fans, as from a pinched patch, is not looked for); 2 when it is one but wound against S (its
+   volume of the other sign), or when pieces wound against S hold over 1 % of its volume (rep->inverted, inverted_vol:
+   part of the mesh turned inside out by the stitch). out is still given with 1 and 2. rep may be NULL; it is filled on
+   -1 too, as far as the stitch got. rep->loops_s, loops_p and unpaired say how the rims paired up (unpaired -1: not
+   simple loops). */
 static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, const int *PT, int pnt, double snap, mk_gmesh *out, mk_graft_report *rep)
 {
     mk_graft_report R = {0};
@@ -501,7 +512,8 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
         R.vol0 = v;
     }
     if (mk_graft_clip_(g->V, g->nv, g->T, g->nt, g->psi, 1, NULL, &CS)) goto out;
-    /* the patch with its rim edges: a directed edge without its reverse; a triangle with two rim edges split at its centre */
+    /* the patch with its rim edges: a directed edge without its reverse; a triangle with two rim edges split at its
+       centre */
     for (int i = 0; i < pnv; i++) mk_gcut_v_(&CP, PV + 3 * (size_t)i);
     de = malloc(3 * (size_t)pnt * sizeof *de);
     if (!de || CP.oom) goto out;
@@ -580,15 +592,16 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
         else pe[p] = be, pt[p] = bt, R.inserted++, memcpy(pq + 3 * (size_t)p, bq, sizeof bq);
     }
     R.snap = sqrt(snap2);
-    /* 1.5.2: the rims as loops. S's rim edges numbered along each loop, so a place on it is (loop, edge number + t). Each patch rim
-       loop should lie on one of S's and each of S's be met by one; the loops that do not (rep->unpaired: a patch loop with no
-       counterpart, as a hole in the patch by the seam or an island of it, one on two of S's loops, a loop of S's met by none or by
-       two) are counted and placed as 1.5.0 placed them: their pieces are mostly specks the cut leaves, but they can break the body
-       (the maintainer's supraspinatus r against the humerus: S 3 loops, the patch 5), which 1 then says. Along a patch loop alone on its
-       loop of S's the places must fall strictly: the longest such run, each place measured behind a start (the vertex nearest S's
-       rim among those in order with both rim neighbours), is kept, and each vertex out of it (a dense rim's wiggle stepping back on
-       S's coarser edges: 1.5.0 then put an edge in twice) is merged into the kept rim neighbour before or after it, moving no
-       farther than snap (else -1); a merged vertex's rim triangle is dropped. Rims that are not simple loops: as 1.5.0. */
+    /* the rims as loops. S's rim edges are numbered along each loop, so a place on it is (loop, edge number + t). Each
+       patch rim loop should lie on one of S's and each of S's be met by one; the loops that do not (rep->unpaired: a
+       patch loop with no counterpart, as a hole in the patch by the seam or an island of it, one on two of S's loops, a
+       loop of S's met by none or by two) are counted and placed vertex by vertex, without the ordering below: their
+       pieces are mostly specks the cut leaves, but they can break the result, which return 1 then says. Along a patch
+       loop alone on its loop of S's the places must fall strictly: the longest such run, each place measured behind a
+       start (the vertex nearest S's rim among those in order with both rim neighbours), is kept, and each vertex out of
+       it (a dense rim's wiggle stepping back on S's coarser edges, which would put an edge in twice) is merged into the
+       kept rim neighbour before or after it, moving no farther than snap (else -1); a merged vertex's rim triangle is
+       dropped. Rims that are not simple loops are placed vertex by vertex too. */
     {
         sl = malloc((size_t)CS.ne * sizeof *sl), so = malloc((size_t)CS.ne * sizeof *so), slen = malloc((size_t)CS.ne * sizeof *slen);
         smet = calloc((size_t)CS.ne, sizeof *smet), startP = malloc((size_t)CP.nv * sizeof *startP), lv = malloc((size_t)CP.ne * sizeof *lv);
@@ -612,7 +625,8 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
             startP[CP.E[3 * (size_t)e2]] = e2;
         }
 #define MK_GR_POS_(v) (so[pe[v]] + pt[v])
-#define MK_GR_BACK_(a, b, n) (MK_GR_POS_(a) - MK_GR_POS_(b) < 0 ? MK_GR_POS_(a) - MK_GR_POS_(b) + (n) : MK_GR_POS_(a) - MK_GR_POS_(b)) /* b behind a, in [0, n) */
+/* MK_GR_BACK_: how far b lies behind a along a loop of n edges, in [0, n) */
+#define MK_GR_BACK_(a, b, n) (MK_GR_POS_(a) - MK_GR_POS_(b) < 0 ? MK_GR_POS_(a) - MK_GR_POS_(b) + (n) : MK_GR_POS_(a) - MK_GR_POS_(b))
         /* the patch's rim loops, one after another in lv (loop q from lst[q]) */
         for (int e0 = 0, k = 0; e0 < CP.ne && simple; e0++) {
             if (pseen[e0]) continue;
@@ -633,30 +647,31 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
             if (one) smet[L]++; /* on one of S's loops */
             else R.unpaired++;
         }
-        for (int L = 0; L < R.loops_s; L++) R.unpaired += smet[L] == 0 ? 1 : smet[L] - 1; /* met by none, or by two or more */
+        for (int L = 0; L < R.loops_s; L++) R.unpaired += smet[L] == 0 ? 1 : smet[L] - 1; /* met by none, or by 2+ */
 #if defined(MK_MUTATE) && MK_MUTATE == 205
-        R.unpaired = 0; /* the loops not counted (1.5.0) */
+        R.unpaired = 0; /* 205: the loops not counted */
 #endif
         for (int q = 0; q < nlp; q++) {
             const int *v = lv + lst[q], k = lst[q + 1] - lst[q], L = sl[pe[v[0]]];
             int one = 1;
             for (int i = 1; i < k; i++) one &= sl[pe[v[i]]] == L;
-            if (!one || smet[L] != 1) continue; /* not alone on one loop of S's: as 1.5.0 */
+            if (!one || smet[L] != 1) continue; /* not alone on one loop of S's: no ordering */
             const double n = slen[L];
-            int s = -1; /* the start: nearest S's rim among the vertices in order with both rim neighbours, else nearest */
+            int s = -1; /* the start: nearest S's rim among vertices in order with both rim neighbours, else nearest */
             for (int i = 0; i < k; i++) {
                 const int a = v[(i + k - 1) % k], b = v[i], c = v[(i + 1) % k];
                 if (MK_GR_BACK_(a, b, n) < 0.5 * n && MK_GR_BACK_(b, c, n) < 0.5 * n && (s < 0 || pd[b] < pd[v[s]])) s = i;
             }
             for (int i = 0; s < 0 && i < k; i++)
                 if (s < 0 || pd[v[i]] < pd[v[s]]) s = i;
-            /* each place as how far behind the start it lies, in (-n, 0]: the longest strictly falling run goes once round */
+            /* each place as how far behind the start it lies, in (-n, 0]: the longest strictly falling run goes once
+               round */
             int nl = 0;
             lw[0] = 0, lkeep[0] = 1;
             for (int j = 1; j < k; j++) {
                 lw[j] = -MK_GR_BACK_(v[s], v[(s + j) % k], n), lkeep[j] = 0, lpre[j] = -1;
 #if defined(MK_MUTATE) && MK_MUTATE == 202
-                lkeep[j] = 1; /* every vertex kept, in or out of order (1.5.0) */
+                lkeep[j] = 1; /* 202: every vertex kept, in or out of order */
                 continue;
 #endif
                 if (!(lw[j] < 0 && lw[j] > -n)) continue;
@@ -669,7 +684,8 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
                 lpre[j] = lo ? ltl[lo - 1] : 0, ltl[lo] = j, nl += lo == nl;
             }
             for (int j = nl ? ltl[nl - 1] : 0; j > 0; j = lpre[j]) lkeep[j] = 1;
-            /* each run out of order between kept a (before) and b (after): its first part into a, the rest into b, by which is nearer */
+            /* each run out of order between kept a (before) and b (after): its first part into a, the rest into b, by
+               which is nearer */
             for (int j = 0; j < k;) {
                 int j2 = j + 1;
                 while (j2 < k && !lkeep[j2]) j2++;
@@ -729,7 +745,7 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
         }
         if (CS.oom) goto out;
     }
-    /* the patch's rim triangles fanned over S's rim vertices between their two ends (S's vertices carried as -1 - id) */
+    /* the patch's rim triangles fanned over S's rim vertices between their two ends (S's vertex i carried as -1 - i) */
     const int ncpt = CP.nt;
     dead = calloc((size_t)ncpt + 1, 1);
     if (!dead) goto out;
@@ -796,7 +812,7 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
     for (int t = 0; t < CP.nt; t++) {
         if (t < ncpt && dead[t]) continue;
 #if defined(MK_MUTATE) && MK_MUTATE == 182
-        if (t >= ncpt) continue; /* the patch's fans left out */
+        if (t >= ncpt) continue; /* 182: the patch's fans left out */
 #endif
         MK_GR_EMIT_(MK_GR_QID_(CP.T[3 * (size_t)t]), MK_GR_QID_(CP.T[3 * (size_t)t + 1]), MK_GR_QID_(CP.T[3 * (size_t)t + 2]));
     }
@@ -811,16 +827,16 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
         const double *a = OV + 3 * (size_t)OT[3 * t], *b = OV + 3 * (size_t)OT[3 * t + 1], *c = OV + 3 * (size_t)OT[3 * t + 2];
         pv[mk_graft_find_(pr, OT[3 * t])] += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
     }
-    /* 1.5.2: the piece of most volume whatever its sign (1.5.0 took the most positive, so a body come out inverted or broken, its
-       volume negative, lost to a closed speck and passed: the maintainer's supraspinatus r became a 42-face speck); a piece wound against S
-       counted, and 2 returned when the kept one is */
+    /* the piece of most volume whatever its sign (with the most positive, a result come out inverted or broken, its
+       volume negative, would lose to a closed speck and pass); a piece wound against S is counted, and 2 returned when
+       the kept one is */
     int big = -1;
     const double sg = R.vol0 < 0 ? -1 : 1;
     for (int i = 0; i < no; i++)
         if (pr[i] == i && pv[i] != 0) {
             R.pieces++, R.inverted += sg * pv[i] < 0, R.inverted_vol += sg * pv[i] < 0 ? pv[i] : 0;
 #if defined(MK_MUTATE) && MK_MUTATE == 203
-            if (big < 0 || pv[i] > pv[big]) big = i; /* the most positive volume (1.5.0) */
+            if (big < 0 || pv[i] > pv[big]) big = i; /* 203: the most positive volume */
 #else
             if (big < 0 || fabs(pv[i]) > fabs(pv[big])) big = i;
 #endif
@@ -860,13 +876,13 @@ static inline int mk_graft_stitch(const mk_graft *g, const double *PV, int pnv, 
         if (!bsearch(&rv, ed, ned, sizeof *ed, mk_graft_cmpu_)) R.lone++;
     }
 #if defined(MK_MUTATE) && MK_MUTATE == 204
-    ret = R.dup || R.lone ? 1 : 0; /* a kept piece wound against S passes (1.5.0) */
+    ret = R.dup || R.lone ? 1 : 0; /* 204: a kept piece wound against S passes */
 #elif defined(MK_MUTATE) && MK_MUTATE == 210
-    ret = R.dup || R.lone ? 1 : sg * R.vol1 < 0 ? 2 : 0; /* only the kept piece judged */
+    ret = R.dup || R.lone ? 1 : sg * R.vol1 < 0 ? 2 : 0; /* 210: only the kept piece judged */
 #else
-    /* 2: the kept piece wound against S, or pieces wound against S holding over 1 % of its volume: the stitch turned part of the
-       body inside out (MEASURED on the maintainer's H3 muscles: 1 to 70 % where the body broke, under 0.1 % for the specks of rounding
-       a clean stitch leaves) */
+    /* 2: the kept piece wound against S, or pieces wound against S holding over 1 % of its volume: the stitch turned
+       part of the mesh inside out (where a stitch broke the result, 1 to 70 %; the rounding specks of a clean stitch,
+       under 0.1 %) */
     ret = R.dup || R.lone ? 1 : sg * R.vol1 < 0 || fabs(R.inverted_vol) > 1e-2 * fabs(R.vol1) ? 2 : 0;
 #endif
 #undef MK_GR_EMIT_

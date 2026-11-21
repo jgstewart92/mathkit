@@ -24,15 +24,17 @@ static inline double mk_v3_dist(mk_v3 a, mk_v3 b) { return mk_v3_len(mk_v3_sub(a
 static inline mk_v3 mk_v3_norm(mk_v3 a)
 {
     double m = fmax(fabs(a.x), fmax(fabs(a.y), fabs(a.z)));
-    if (m > 0 && m < INFINITY) { /* by a power of two, exact: the same result wherever |a|^2 did not under- or overflow */
+    /* scaled by a power of two (exact): |a|^2 cannot under- or overflow, and where it could not anyway the result is
+       the plain formula's */
+    if (m > 0 && m < INFINITY) {
         int e = ilogb(m);
         a = (mk_v3){ldexp(a.x, -e), ldexp(a.y, -e), ldexp(a.z, -e)};
     }
     double l = mk_v3_len(a);
     return l > 0 ? mk_v3_scale(a, 1.0 / l) : a;
 }
-/* a + t (b - a), exactly a at t = 0 and b at t = 1 (1.6.2: a also beside an infinite b, which gave NaN, and -0 kept); where b - a
-   overflows, (1 - t) a + t b (1.6.0, the review's S1 and I1). The kit's one linear interpolation: mk_interp's and mk_stats' use it. */
+/* a + t (b - a): exactly a at t = 0 (even beside an infinite b, and -0 stays -0) and b at t = 1; where b - a overflows,
+   (1 - t) a + t b. The kit's one linear interpolation: mk_interp.h and mk_stats.h use it. */
 static inline double mk_lerp(double a, double b, double t)
 {
     const double d = b - a;
@@ -47,7 +49,7 @@ static inline mk_quat mk_q_mul(mk_quat a, mk_quat b)
 {
     return (mk_quat){a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
 #if defined(MK_MUTATE) && MK_MUTATE == 2
-                     a.w * b.x + a.x * b.w - a.y * b.z + a.z * b.y,
+                     a.w * b.x + a.x * b.w - a.y * b.z + a.z * b.y, /* planted fault: a cross term's sign */
 #else
                      a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
 #endif
@@ -64,10 +66,11 @@ static inline mk_quat mk_q_norm(mk_quat q)
         q = (mk_quat){ldexp(q.w, -e), ldexp(q.x, -e), ldexp(q.y, -e), ldexp(q.z, -e)};
     }
     double l = sqrt(mk_q_dot(q, q));
-    return l == 0 ? mk_q_identity() : (mk_quat){q.w / l, q.x / l, q.y / l, q.z / l}; /* 1.6.1: a NaN comes back NaN (1.6.0: identity) */
+    /* 0 gives the identity; a NaN stays NaN */
+    return l == 0 ? mk_q_identity() : (mk_quat){q.w / l, q.x / l, q.y / l, q.z / l};
 }
-/* rotation by ang radians about axis (any length; a zero axis gives the identity, 1.6.0, for a finite angle: 1.6.2, NaN for a NaN or
-   infinite one, as about any other axis) */
+/* rotation by ang radians about axis (any length). A zero axis gives the identity for a finite angle; a NaN or infinite
+   angle gives NaN, about any axis. */
 static inline mk_quat mk_q_axis_angle(mk_v3 axis, double ang)
 {
     axis = mk_v3_norm(axis);
@@ -88,7 +91,7 @@ static inline mk_v3 mk_q_rotate(mk_quat q, mk_v3 v)
     mk_v3 u = {q.x, q.y, q.z};
     mk_v3 t = mk_v3_scale(mk_v3_cross(u, v), 2);
 #if defined(MK_MUTATE) && MK_MUTATE == 1
-    return mk_v3_add(mk_v3_sub(v, mk_v3_scale(t, q.w)), mk_v3_cross(u, t));
+    return mk_v3_add(mk_v3_sub(v, mk_v3_scale(t, q.w)), mk_v3_cross(u, t)); /* planted fault: the w term's sign */
 #else
     return mk_v3_add(mk_v3_add(v, mk_v3_scale(t, q.w)), mk_v3_cross(u, t));
 #endif

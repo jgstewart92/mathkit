@@ -1,14 +1,13 @@
 /* mathkit: sparse matrices and Krylov solvers. CSR (compressed rows, columns sorted, duplicates summed) built from
-   triplets or from cudakit's ck_spd3 layout (the lower triangle in 3x3 block-CSR), so a caller can move between the GPU
-   and the CPU with the same arrays. Conjugate gradients with no, Jacobi, 3x3 block-Jacobi or incomplete-Cholesky IC(0)
-   preconditioning; BiCGSTAB for nonsymmetric systems. Solvers follow ck_spd3_solve: x holds the first guess and gets the
-   answer; tol is on |b - A x| / |b|; return 0 converged, 1 not within maxit, -1 breakdown, no memory, a bad argument or
-   an answer that is not finite. The solvers work in units of a power of two near b's largest entry, so any scale of b
-   gives the same iterations and x scaled exactly. A itself is not rescaled: entries past about 1e300 or below 1e-300
-   can still under- or overflow the dots. Threads (mk_par.h, with -fopenmp): the product, the dots, the vector updates and
-   the Jacobi and block-Jacobi steps run on blocks of rows; IC(0) is serial. A dot over more than one block (n > 4096) adds
-   the blocks' partials in block order, so it differs in rounding from 1.4.0's one serial sum but not between thread counts.
-   Header only, C23. */
+   triplets, or from a symmetric matrix's lower triangle in 3x3 block CSR. Conjugate gradients with no, Jacobi, 3x3
+   block-Jacobi or incomplete-Cholesky IC(0) preconditioning; BiCGSTAB for nonsymmetric systems. Both solvers: x holds
+   the first guess and gets the answer; tol is on |b - A x| / |b|; return 0 converged, 1 not within maxit, -1 breakdown,
+   no memory, a bad argument or an answer that is not finite. The solvers work in units of a power of two near b's
+   largest entry, so any scale of b gives the same iterations and x scaled exactly. A itself is not rescaled: entries
+   past about 1e300 or below 1e-300 can still under- or overflow the dots. Threads (mk_par.h, with -fopenmp): the
+   product, the dots, the vector updates and the Jacobi and block-Jacobi steps run on blocks of rows; IC(0) is serial. A
+   dot over more than one block (n > 4096) adds the blocks' partials in block order, so it differs in rounding from one
+   serial sum but not between thread counts. Header only, C23. */
 #ifndef MK_SPARSE_H
 #define MK_SPARSE_H
 #include "mk_par.h"
@@ -30,16 +29,17 @@ static inline void mk_csr_free(mk_csr *A)
     A->rowptr = A->col = NULL, A->val = NULL, A->n = 0;
 }
 
-typedef struct { int r, c; union { long k; double v; }; } mk_trip_; /* k, the triplet's place in the input, until the sort is done */
+/* k, the triplet's place in the input, until the sort is done */
+typedef struct { int r, c; union { long k; double v; }; } mk_trip_;
 static inline int mk_trip_cmp_(const void *x, const void *y)
 {
     const mk_trip_ *a = x, *b = y;
     return a->r != b->r ? (a->r > b->r) - (a->r < b->r) : a->c != b->c ? (a->c > b->c) - (a->c < b->c) : (a->k > b->k) - (a->k < b->k);
 }
-/* n x n from nnz triplets (row, col, value); repeated positions are summed in input order, with any C library (1.6.2: the sort's ties
-   go by input place; 1.6.1 summed in qsort's order of equal keys, which glibc 2.44 keeps only while it can malloc its buffer: under a
-   capped address space 3636 of 10000 positions summed otherwise). 0 or -1. At most INT_MAX distinct positions (rowptr is int; about
-   2.1e9 entries, near 100 GB while building: not checked). */
+/* n x n from nnz triplets (row, col, value); repeated positions are summed in input order with any C library (the sort
+   breaks ties by input place, so qsort's order of equal keys does not matter). 0, or -1 for a negative size, an index
+   out of range or no memory. At most INT_MAX distinct positions (rowptr is int; about 2.1e9 entries, near 100 GB while
+   building): not checked. */
 static inline int mk_csr_from_triplets(mk_csr *A, int n, long nnz, const int *ri, const int *ci, const double *v)
 {
     A->n = 0, A->rowptr = A->col = NULL, A->val = NULL;
@@ -66,9 +66,10 @@ static inline int mk_csr_from_triplets(mk_csr *A, int n, long nnz, const int *ri
     free(t);
     return 0;
 }
-/* the full scalar matrix of a symmetric 3x3-block matrix given as ck_spd3 takes it: its lower triangle, row[nb + 1],
-   col[nnzb] (col <= row), lower[9 nnzb] row-major blocks. 3 nb unknowns. 0 or -1 (1.6.0: also for a block above the diagonal,
-   which 1.5.6 mirrored and summed twice). */
+/* the full scalar matrix of a symmetric matrix of 3x3 blocks given by its lower triangle in block CSR: row has nb + 1
+   entries, block row i holds blocks row[i] .. row[i + 1] - 1, block e sits in block column col[e] <= i, and lower[9 e]
+   starts its 3x3 values, row-major (a diagonal block in full). Each off-diagonal block is also placed, transposed,
+   above the diagonal. 3 nb unknowns. 0, or -1 for a block above the diagonal, a bad nb or no memory. */
 static inline int mk_csr_from_bsr3_lower(mk_csr *A, int nb, const int *row, const int *col, const double *lower)
 {
     A->n = 0, A->rowptr = A->col = NULL, A->val = NULL;
@@ -106,7 +107,8 @@ static inline void mk_csr_matvec_rows_(const mk_csr *A, const double *x, double 
 static inline void mk_csr_matvec(const mk_csr *A, const double *x, double *y)
 {
 #if defined(MK_MUTATE) && MK_MUTATE == 108
-    MK_PAR_CUT_(A->n, i0, i1, mk_csr_matvec_rows_(A, x, y, i0, i1)); /* 108: rows cut by the thread count, each piece's last row left out */
+    /* planted fault: rows cut by the thread count, each piece's last row left out */
+    MK_PAR_CUT_(A->n, i0, i1, mk_csr_matvec_rows_(A, x, y, i0, i1));
 #else
     MK_PAR_FOR_(A->n, i0, i1, mk_csr_matvec_rows_(A, x, y, i0, i1));
 #endif
@@ -115,7 +117,7 @@ static inline void mk_csr_matvec(const mk_csr *A, const double *x, double *y)
 enum { MK_PC_NONE = 0, MK_PC_JACOBI = 1, MK_PC_BJACOBI3 = 2, MK_PC_IC0 = 3, MK_PC_MEANFREE = 16 };
 
 /* IC(0): L on the lower pattern of A, A ~ L L^T. A breakdown (a pivot <= 0) retries with the diagonal raised by
-   1e-3, 4e-3, ... (Manteuffel's shift). */
+   1e-3, 4e-3, ... up to 0.256 (Manteuffel 1980's shift). */
 typedef struct { int n; int *rowptr, *col; double *val; double shift; } mk_ic0_;
 static inline void mk_ic0_free_(mk_ic0_ *L) { free(L->rowptr), free(L->col), free(L->val); }
 static inline int mk_ic0_build_(mk_ic0_ *L, const mk_csr *A)
@@ -173,7 +175,7 @@ static inline void mk_ic0_apply_(const mk_ic0_ *L, const double *r, double *z)
     for (int i = 0; i < n; i++) {
         double s = r[i];
         int r1 = L->rowptr[i + 1] - 1;
-#if !(defined(MK_MUTATE) && MK_MUTATE == 103)
+#if !(defined(MK_MUTATE) && MK_MUTATE == 103) /* planted fault 103: the forward solve without L's off-diagonal */
         for (int e = L->rowptr[i]; e < r1; e++) s -= L->val[e] * z[L->col[e]];
 #endif
         z[i] = s / L->val[r1];
@@ -204,7 +206,7 @@ static inline int mk_pc_build_(mk_pc_ *P, const mk_csr *A, int kind)
         return 0;
     }
     if (n % 3) { free(P->d); return -1; }
-    for (int b = 0; b < n / 3; b++) { /* the inverse of each 3x3 diagonal block, as cudakit's k_dinv */
+    for (int b = 0; b < n / 3; b++) { /* the inverse of each 3x3 diagonal block (0 where it is singular) */
         double m[9] = {0};
         for (int a = 0; a < 3; a++) {
             int i = 3 * b + a;
@@ -215,7 +217,7 @@ static inline int mk_pc_build_(mk_pc_ *P, const mk_csr *A, int kind)
         int ex = 0;
         for (int t = 0; t < 9; t++) mx = fmax(mx, fabs(m[t]));
 #if !(defined(MK_MUTATE) && MK_MUTATE == 106)
-        if (mx > 0 && isfinite(mx)) frexp(mx, &ex); /* 106: the absolute test of 1.0.5 */
+        if (mx > 0 && isfinite(mx)) frexp(mx, &ex); /* planted fault 106 skips this, so the test is absolute */
 #endif
         for (int t = 0; t < 9; t++) m[t] = ldexp(m[t], -ex);
         double a0 = m[0], b0 = m[1], c0 = m[2], d0 = m[3], e0 = m[4], f0 = m[5], g0 = m[6], h0 = m[7], k0 = m[8];
@@ -281,8 +283,9 @@ static inline void mk_cg_xr_blk_(double *x, double *r, const double *p, const do
 }
 /* p = z + beta p */
 static inline void mk_xpby_blk_(const double *z, double beta, double *p, long i0, long i1) { for (long i = i0; i < i1; i++) p[i] = z[i] + beta * p[i]; }
-/* CG's passes that also give a block's partial of a dot, so one pass over the block does both: q = A p with p.q; the update
-   x += c p, r -= a q with r.r; Jacobi's z = P r with r.z. Each partial is the one mk_dot_blk_ gives on the block. */
+/* CG's passes that also give a block's partial of a dot, so one pass over the block does both: q = A p with p.q; the
+   update x += c p, r -= a q with r.r; Jacobi's z = P r with r.z. Each partial is the one mk_dot_blk_ gives on the
+   block. */
 static inline double mk_cg_aq_blk_(const mk_csr *A, const double *p, double *q, long i0, long i1)
 {
     mk_csr_matvec_rows_(A, p, q, i0, i1);
@@ -323,7 +326,7 @@ static inline double mk_unit_(const double *b, double *r, int n, double *u)
     if (e > 1023) e = 1023;
     MK_PAR_FOR_(n, i0, i1, mk_unit_blk_(b, r, u, e, i0, i1));
 #if defined(MK_MUTATE) && MK_MUTATE == 105
-    for (int i = 0; i < n; i++) r[i] = ldexp(r[i], e), u[i] = b[i]; /* unscaled, as 1.0.5 */
+    for (int i = 0; i < n; i++) r[i] = ldexp(r[i], e), u[i] = b[i]; /* planted fault: unscaled */
     e = 0;
 #endif
     return ldexp(1.0, e);
@@ -337,12 +340,11 @@ static inline void mk_meanfree_(double *r, int n)
 }
 
 /* (preconditioned) conjugate gradients for symmetric positive-definite A. precond: MK_PC_NONE, _JACOBI, _BJACOBI3 or
-   _IC0, plus MK_PC_MEANFREE for a singular A whose null space is the constants (periodic or all-Neumann Poisson, as
-   gauge's lattice.c): the residual is kept mean-free; any other bit is refused (-1, 1.6.2). 0 and 1 report the true residual
-   b - A x in relres (1.6.1): when the recurrence's reaches tol, b - A x is formed again, and CG restarts from x while it is still past
-   tol (1.6.0 returned 0 on the recurrence's, 173 times below the true one on a 1-D Laplacian of 5000 from x0 1e6), and stops with 1
-   when a restart did not lower it (1.6.2: tol under the attainable accuracy; 1.6.1 restarted to maxit, 1e6 iterations on 144
-   unknowns). On -1 relres is the last the iteration had. A negative r z (an indefinite preconditioner) is -1. */
+   _IC0, plus MK_PC_MEANFREE for a singular A whose null space is the constants (periodic or all-Neumann Poisson): the
+   residual is kept mean-free; any other bit is refused (-1). 0 and 1 report the true residual b - A x in relres: when
+   the recurrence's residual reaches tol, b - A x is formed again, CG restarts from x while that is still past tol, and
+   stops with 1 when a restart did not lower it (tol under the attainable accuracy). *iters counts the iterations of all
+   passes. On -1 relres is the last the iteration had. A negative r z (an indefinite preconditioner) is -1. */
 static inline int mk_cg(const mk_csr *A, const double *b, double *x, int precond, double tol, int maxit, int *iters, double *relres)
 {
     int n = A->n, meanfree = precond & MK_PC_MEANFREE, kind = precond & 15, it = 0, ret = 1, last = 0;
@@ -350,16 +352,19 @@ static inline int mk_cg(const mk_csr *A, const double *b, double *x, int precond
     if (relres) *relres = NAN;
     mk_pc_ P = {0};
     double *w = malloc(sizeof(double) * 4 * (size_t)n);
-    if (!w || (precond & ~31) || mk_pc_build_(&P, A, kind)) { free(w); return -1; } /* 1.6.2: bits past MK_PC_MEANFREE refused (1.6.1 ignored them) */
+    /* bits past MK_PC_MEANFREE refused */
+    if (!w || (precond & ~31) || mk_pc_build_(&P, A, kind)) { free(w); return -1; }
     double *r = w, *z = r + n, *p = z + n, *q = p + n, sc, bn, rn, rnp = 0;
-    for (int pass = 0;; pass++) { /* a pass: the true residual, then CG from x until the recurrence's reaches tol, maxit, a stall or a breakdown */
+    /* a pass: the true residual, then CG from x until the recurrence's reaches tol, maxit, a stall or a breakdown */
+    for (int pass = 0;; pass++) {
         mk_csr_matvec(A, x, q);
         MK_PAR_FOR_(n, i0, i1, mk_sub_blk_(b, q, r, i0, i1));
         if (meanfree) mk_meanfree_(r, n);
         sc = mk_unit_(b, r, n, q), bn = sqrt(mk_dot_(q, q, n)), rn = sqrt(mk_dot_(r, r, n));
         if (bn == 0) bn = 1;
         if (rn / bn <= tol) { ret = 0; break; }
-        if (last || it >= maxit || (pass && rn >= rnp)) { ret = 1; break; } /* 1.6.2: a restart that did not lower b - A x ends it (tol under attainable accuracy) */
+        /* a restart that did not lower b - A x ends it */
+        if (last || it >= maxit || (pass && rn >= rnp)) { ret = 1; break; }
         rnp = rn;
         mk_pc_apply_(&P, n, r, z);
         if (meanfree) mk_meanfree_(z, n);
@@ -372,43 +377,47 @@ static inline int mk_cg(const mk_csr *A, const double *b, double *x, int precond
             MK_PAR_SUM_(n, i0, i1, mk_cg_aq_blk_(A, p, q, i0, i1), pq); /* q = A p and p.q in one pass */
             if (!(pq > 0)) { ret = -1; break; } /* lost positive-definiteness, or NaN */
             double a = rz / pq;
+            /* x += c p, r -= a q, then r.r; without MK_PC_MEANFREE the update and r.r in one pass */
             if (meanfree) {
                 MK_PAR_FOR_(n, i0, i1, mk_cg_xr_blk_(x, r, p, q, a * sc, a, i0, i1));
                 mk_meanfree_(r, n);
                 rr = mk_dot_(r, r, n);
-            } else MK_PAR_SUM_(n, i0, i1, mk_cg_xrr_blk_(x, r, p, q, a * sc, a, i0, i1), rr); /* the update and r.r in one pass */
+            } else MK_PAR_SUM_(n, i0, i1, mk_cg_xrr_blk_(x, r, p, q, a * sc, a, i0, i1), rr);
             rn = sqrt(rr);
             it++;
             if (rn / bn <= tol) { ret = 0; break; }
             const double *zz = z;
-            if (kind == MK_PC_NONE && !meanfree) zz = r, rz2 = rr; /* z = r, so r.z is r.r bit for bit */
-            else if (kind == MK_PC_JACOBI && !meanfree) MK_PAR_SUM_(n, i0, i1, mk_cg_pz_blk_(&P, r, z, i0, i1), rz2); /* z = P r and r.z in one pass */
+            /* z and r.z: with no preconditioner z = r, so r.z is r.r bit for bit; Jacobi forms z = P r and r.z in one
+               pass */
+            if (kind == MK_PC_NONE && !meanfree) zz = r, rz2 = rr;
+            else if (kind == MK_PC_JACOBI && !meanfree) MK_PAR_SUM_(n, i0, i1, mk_cg_pz_blk_(&P, r, z, i0, i1), rz2);
             else {
                 mk_pc_apply_(&P, n, r, z);
                 if (meanfree) mk_meanfree_(z, n);
                 rz2 = mk_dot_(r, z, n);
             }
-            /* r z negative or NaN: a breakdown (1.6.1; 1.6.0 stopped with 1). r z zero, or underflowed after falling 2^-100 below its
-               start (the residual about 1e-15 of its first: past attainable accuracy, as with tol 0): a stall. An underflow alone
+            /* r z negative or NaN: a breakdown. r z zero, or underflowed after falling 2^-100 below its start (the
+               residual about 1e-15 of its first: past attainable accuracy, as with tol 0): a stall. An underflow alone
                is not a stop: a preconditioner near 1e290 starts r z near 1e-290, and those solves still converge. */
             if (!(rz2 >= 0)) { ret = -1; break; }
             if (!(rz2 > 0) || (rz2 < DBL_MIN && rz2 < rz0 * 0x1p-100)) break;
 #if defined(MK_MUTATE) && MK_MUTATE == 101
-            double beta = 0; (void)rz2;
+            double beta = 0; (void)rz2; /* planted fault: beta 0, steepest descent */
 #else
             double beta = rz2 / rz;
 #endif
             MK_PAR_FOR_(n, i0, i1, mk_xpby_blk_(zz, beta, p, i0, i1));
             rz = rz2;
         }
-        if (ret < 0) { /* a restart that broke down before its first step (r z or p A p underflowing at an extreme scale of A) leaves x as the
-                          last pass had it, and rn its true residual: not within tol (1), not a breakdown */
+        /* a restart that broke down before its first step (r z or p A p underflowing at an extreme scale of A) leaves x
+           as the last pass had it, and rn its true residual: not within tol (1), not a breakdown */
+        if (ret < 0) {
             if (pass && it == it0) ret = 1;
             break;
         }
         last = ret; /* 1 (maxit or a stall): the next pass reads the true residual and stops */
     }
-#if !(defined(MK_MUTATE) && MK_MUTATE == 104)
+#if !(defined(MK_MUTATE) && MK_MUTATE == 104) /* planted fault 104: a non-finite x not refused */
     if (ret >= 0) for (int i = 0; i < n; i++) if (!isfinite(x[i])) { ret = -1; break; }
 #endif
     if (iters) *iters = it;
@@ -436,16 +445,16 @@ static inline void mk_bi_xr_blk_(double *x, double *r, const double *ph, const d
 {
     for (long i = i0; i < i1; i++) x[i] += ca * ph[i] + co * sh[i], r[i] = s[i] - om * t[i];
 }
-/* BiCGSTAB (van der Vorst 1992), right-preconditioned (MK_PC_NONE, _JACOBI or _BJACOBI3) for a general A. As mk_cg (1.6.1, 1.6.2): 0
-   and 1 with the true residual, restarts from x while it is past tol and falling; MK_PC_MEANFREE (1.6.0 dropped it) and any other bit
-   are refused. */
+/* BiCGSTAB (van der Vorst 1992), right-preconditioned (MK_PC_NONE, _JACOBI or _BJACOBI3) for a general A. As mk_cg: 0
+   and 1 with the true residual, restarts from x while it is past tol and falling. MK_PC_IC0, MK_PC_MEANFREE and any
+   other bit are refused (-1). */
 static inline int mk_bicgstab(const mk_csr *A, const double *b, double *x, int precond, double tol, int maxit, int *iters, double *relres)
 {
     int n = A->n, it = 0, ret = 1, last = 0;
     if (iters) *iters = 0;
     if (relres) *relres = NAN;
     mk_pc_ P = {0};
-    if ((precond & 15) == MK_PC_IC0 || (precond & ~15)) return -1; /* 1.6.2: and any bit past them (1.6.1 ignored 32 and up) */
+    if ((precond & 15) == MK_PC_IC0 || (precond & ~15)) return -1; /* IC(0), MK_PC_MEANFREE and any higher bit */
     double *w = malloc(sizeof(double) * 8 * (size_t)n);
     if (!w || mk_pc_build_(&P, A, precond & 15)) { free(w); return -1; }
     double *r = w, *r0 = r + n, *p = r0 + n, *v = p + n, *s = v + n, *t = s + n, *ph = t + n, *sh = ph + n, sc, bn, rn, rnp = 0;
@@ -455,7 +464,7 @@ static inline int mk_bicgstab(const mk_csr *A, const double *b, double *x, int p
         sc = mk_unit_(b, r, n, s), bn = sqrt(mk_dot_(s, s, n)), rn = sqrt(mk_dot_(r, r, n));
         if (bn == 0) bn = 1;
         if (rn / bn <= tol) { ret = 0; break; }
-        if (last || it >= maxit || (pass && rn >= rnp)) { ret = 1; break; } /* 1.6.2: as mk_cg's */
+        if (last || it >= maxit || (pass && rn >= rnp)) { ret = 1; break; } /* as mk_cg's */
         rnp = rn;
         double rho = 1, alpha = 1, om = 1;
         MK_PAR_FOR_(n, i0, i1, mk_bi_start_blk_(r, r0, p, v, i0, i1));
@@ -485,7 +494,8 @@ static inline int mk_bicgstab(const mk_csr *A, const double *b, double *x, int p
             double tt = mk_dot_(t, t, n);
             om = tt > 0 ? mk_dot_(t, s, n) / tt : 0;
 #if defined(MK_MUTATE) && MK_MUTATE == 102
-            for (int i = 0; i < n; i++) x[i] += alpha * ph[i], r[i] = s[i] - om * t[i]; /* the omega step left out of x */
+            /* planted fault: the omega step left out of x */
+            for (int i = 0; i < n; i++) x[i] += alpha * ph[i], r[i] = s[i] - om * t[i];
 #else
             MK_PAR_FOR_(n, i0, i1, mk_bi_xr_blk_(x, r, ph, sh, s, t, alpha * sc, om * sc, om, i0, i1));
 #endif

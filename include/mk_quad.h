@@ -1,7 +1,7 @@
-/* mathkit: numerical integration. Gauss-Legendre nodes and weights for any n (Newton on the Legendre recurrence, exact for
-   polynomials to degree 2n - 1); adaptive Gauss-Kronrod 7-15 with an error estimate, which also takes integrable endpoint
-   singularities (nodes never touch the ends); rules on the reference triangle (0,0) (1,0) (0,1) and tetrahedron
-   (0,0,0) (1,0,0) (0,1,0) (0,0,1), weights summing to the area 1/2 and the volume 1/6. Header only, C23. */
+/* mathkit: numerical integration. Gauss-Legendre nodes and weights for any n (Newton on the Legendre recurrence, exact
+   for polynomials to degree 2n - 1); adaptive Gauss-Kronrod 7-15 with an error estimate, which also takes integrable
+   endpoint singularities (nodes never touch the ends); rules on the reference triangle (0,0) (1,0) (0,1) and
+   tetrahedron (0,0,0) (1,0,0) (0,1,0) (0,0,1), weights summing to the area 1/2 and the volume 1/6. Header only, C23. */
 #ifndef MK_QUAD_H
 #define MK_QUAD_H
 #include <math.h>
@@ -9,8 +9,9 @@
 
 #define MK_QUAD_PI 3.14159265358979323846
 
-/* n nodes x[] (ascending) and weights w[] on [-1, 1]; 0, or -1 if Newton did not settle or n is outside 1..2^30. O(n^2): n 65536
-   takes 23 s (MEASURED 1.6.1, the development machine); every n from 21 to 2000 and 2^11 to 2^16 settles, weights summing to 2 within 1.8e-15. */
+/* n nodes x[] (ascending) and weights w[] on [-1, 1]; 0, or -1 if Newton did not settle or n is outside 1..2^30.
+   O(n^2): n 65536 takes about 23 s on an x86-64 desktop. Tested: every n from 21 to 2000 and from 2^11 to 2^16 settles,
+   the weights summing to 2 within 1.8e-15. */
 static inline int mk_gauss_legendre(int n, double *x, double *w)
 {
     if (n < 1 || n > (1 << 30)) return -1; /* 2 * k - 1 and (n + 1) / 2 stay inside an int */
@@ -38,7 +39,7 @@ static inline int mk_gauss_legendre(int n, double *x, double *w)
         dp = n * (z * p1 - p0) / (z * z - 1);
         x[n - 1 - i] = z, x[i] = -z;
 #if defined(MK_MUTATE) && MK_MUTATE == 111
-        w[i] = w[n - 1 - i] = 2 / ((1 - z * z) * dp * dp) * (1 + 1e-6);
+        w[i] = w[n - 1 - i] = 2 / ((1 - z * z) * dp * dp) * (1 + 1e-6); /* planted fault: weights 1e-6 high */
 #else
         w[i] = w[n - 1 - i] = 2 / ((1 - z * z) * dp * dp);
 #endif
@@ -47,7 +48,7 @@ static inline int mk_gauss_legendre(int n, double *x, double *w)
     return 0;
 }
 
-/* Kronrod 15 and its embedded Gauss 7 (QUADPACK qk15): nodes on [0, 1), symmetric */
+/* Kronrod 15 and its embedded Gauss 7 (QUADPACK's qk15, Piessens et al. 1983): nodes on [0, 1), symmetric */
 static const double mk_gk15_x_[8] = {0.991455371120812639206854697526329, 0.949107912342758524526189684047851,
                                      0.864864423359769072789712788640926, 0.741531185599394439863864773280788,
                                      0.586087235467691130294144845693013, 0.405845151377397166906606412076961,
@@ -70,7 +71,7 @@ static inline double mk_gk15(mk_qfn f, void *ctx, double a, double b, double *er
         double dx = h * mk_gk15_x_[j], s = f(c - dx, ctx) + f(c + dx, ctx);
         k += mk_gk15_wk_[j] * s;
 #if defined(MK_MUTATE) && MK_MUTATE == 112
-        if (j % 2 == 1) g += mk_gk15_wg_[j / 2] * s * 1.001;
+        if (j % 2 == 1) g += mk_gk15_wg_[j / 2] * s * 1.001; /* planted fault: a wrong Gauss value, so a wrong error */
 #else
         if (j % 2 == 1) g += mk_gk15_wg_[j / 2] * s;
 #endif
@@ -80,8 +81,8 @@ static inline double mk_gk15(mk_qfn f, void *ctx, double a, double b, double *er
 }
 
 /* adaptive: bisect the interval with the largest error until the sum of errors is under max(abstol, reltol |I|) or
-   maxint intervals are in use. Returns the integral; *err the estimate; *status 0 met, 1 interval budget spent, -1 no memory
-   or maxint >= 2^29 (refused before f is called or anything is allocated). */
+   maxint intervals are in use. Returns the integral; *err the estimate; *status 0 met, 1 interval budget spent, -1 no
+   memory or maxint >= 2^29 (refused before f is called or anything is allocated). */
 static inline double mk_quad_adapt(mk_qfn f, void *ctx, double a, double b, double abstol, double reltol, int maxint, double *err, int *status)
 {
     if (err) *err = NAN;
@@ -94,7 +95,8 @@ static inline double mk_quad_adapt(mk_qfn f, void *ctx, double a, double b, doub
     double tot, et;
     int st = 1;
     for (;;) {
-        int w = 0; /* the sums are re-formed each pass (the search is O(m) anyway): running updates drift by cancellation */
+        /* the sums are re-formed each pass (the search is O(m) anyway): running updates drift by cancellation */
+        int w = 0;
         tot = 0, et = 0;
         for (int i = 0; i < m; i++) { tot += iv[4 * i + 2], et += iv[4 * i + 3]; if (iv[4 * i + 3] > iv[4 * w + 3]) w = i; }
         if (et <= fmax(abstol, reltol * fabs(tot))) { st = 0; break; }
@@ -113,8 +115,9 @@ static inline double mk_quad_adapt(mk_qfn f, void *ctx, double a, double b, doub
     return tot;
 }
 
-/* triangle and tetrahedron rules: point i at barycentric-free coordinates p[i][..], weight w[i]; the count returned.
-   degree 1 (centroid), 2 (3 points, as body-claude's bfe.c), 5 (Radon's 7 points); 3 and 4 get the 7, past 5 the count is 0 (no rule). */
+/* triangle and tetrahedron rules: point i at p[i] in the reference element's Cartesian coordinates (not barycentric),
+   weight w[i]; the count returned. Triangle: degree 1 (centroid), 2 (3 points), 5 (Radon's 7 points, 1948); 3 and 4 get
+   the 7, past 5 the count is 0 (no rule). */
 static inline int mk_tri_rule(int degree, double p[][2], double w[])
 {
     if (degree <= 1) { p[0][0] = p[0][1] = 1.0 / 3, w[0] = 0.5; return 1; }
@@ -122,7 +125,7 @@ static inline int mk_tri_rule(int degree, double p[][2], double w[])
         const double q[3][2] = {{1.0 / 6, 1.0 / 6}, {2.0 / 3, 1.0 / 6}, {1.0 / 6, 2.0 / 3}};
         for (int i = 0; i < 3; i++) p[i][0] = q[i][0], p[i][1] = q[i][1], w[i] = 1.0 / 6;
 #if defined(MK_MUTATE) && MK_MUTATE == 113
-        p[1][0] = 0.6;
+        p[1][0] = 0.6; /* planted fault: a point moved */
 #endif
         return 3;
     }
@@ -136,13 +139,14 @@ static inline int mk_tri_rule(int degree, double p[][2], double w[])
     }
     return 7;
 }
-/* degree 1 (centroid), 2 (4 points, as bfe.c and fable), 3 (Keast's 5 points: one negative weight); past 3 the count is 0 */
+/* tetrahedron: degree 1 (centroid), 2 (4 points), 3 (Keast's 5 points, 1986: one negative weight); past 3 the count
+   is 0 */
 static inline int mk_tet_rule(int degree, double p[][3], double w[])
 {
     if (degree <= 1) { p[0][0] = p[0][1] = p[0][2] = 0.25, w[0] = 1.0 / 6; return 1; }
     if (degree == 2) {
 #if defined(MK_MUTATE) && MK_MUTATE == 114
-        const double a = 0.58, b = 0.14;
+        const double a = 0.58, b = 0.14; /* planted fault: the points rounded */
 #else
         const double a = 0.5854101966249685, b = 0.1381966011250105;
 #endif

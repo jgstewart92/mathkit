@@ -1,27 +1,27 @@
-/* mathkit: a closed (or open) triangle mesh decimated without new folds, crossings or drift. mesher-fable's folddec (2026-11-15),
-   from mesher's objdec: Garland-Heckbert quadrics with half-edge collapses only, so every kept vertex is one of the input's, at
-   its input coordinates (a caller writes the input's own text back: no digit changes), and the link condition, so a closed
-   2-manifold keeps its topology. Each collapse is refused when it would
+/* mathkit: decimation of a closed (or open) triangle mesh without new folds, crossings or drift. Header only, C23.
+   mk_decimate uses quadric error costs (Garland and Heckbert 1997) with half-edge collapses only, so every kept
+   vertex is one of the input's at its input coordinates (a caller can write the input's own text back, digit for
+   digit), and the link condition, so a closed 2-manifold keeps its topology. Each collapse is refused when it would
      turn   a triangle more than acos(turn) from where it was or from the input's normals there;
      edge   make an edge longer than maxedge;
      angle  make a triangle's smallest angle under minangle, unless the fan already had a smaller one;
-     fold   lengthen, among the edges it touches, the summed length of edges whose two faces differ by over 90 degrees, or by over
-            `fold` degrees (per region when a region function is given), so every fold length can only fall;
-     dist   leave an input vertex farther than dist from the result (each removed vertex is owned by a triangle of the fan that
-            replaced it and re-measured at each collapse: exact, one side), or put a sample point of a new triangle farther than
-            dist from the input surface (mk_geom's tree: the other side);
-     cross  make a new triangle cross a live one it shares no vertex with (an edge through the other's interior, meshcheck's strict
-            test), so an input with no crossing pairs gives none.
-   Each vertex queues its cheapest target that passes the cheap refusals (turn, edge, angle, fold); distance and crossing are
-   tried when it comes up, and on a refusal the next-best target is queued. Stops at `target` vertices or when nothing more is
-   allowed. keep (optional, a byte a vertex): 0 free; 1 or 3 never removed; 2 a seam vertex, removed only along the seam (onto a
-   2 or 3, the held side's triangles staying in their planes). An open surface's rim vertex goes only along the rim. clean (1):
-   a triangle caught in a crossing (before) or under minalt high (after) is removed by collapsing one of its edges under the same
-   refusals; one that still stands is tried once more under the link, keep, seam and crossing refusals alone (a needle only by an
-   edge under 20 minalt). mk_dec_defaults sets mesher's values for a unit (one millimetre = mm). Header only, C23.
-   Experimental (1.6.0): not frozen with the numerical core; its results may still change between releases.
-   Size: the marks are 32-bit stamps, about 48 a collapse (MEASURED on an icosphere, 1.6.0); past 2^32 of them (about 9e7
-   collapses, an input near 1e8 vertices) a stale mark can read as current. */
+     fold   lengthen, among the edges it touches, the summed length of edges whose two faces differ by over 90 degrees,
+            or by over `fold` degrees (per region when a region function is given), so every fold length can only fall;
+     dist   leave an input vertex farther than dist from the result (each removed vertex is owned by a triangle of the
+            fan that replaced it and re-measured at each collapse: exact, one side), or put a sample point of a new
+            triangle farther than dist from the input surface (through mk_geom's tree: the other side);
+     cross  make a new triangle cross a live one it shares no vertex with (an edge through the other's interior,
+            mk_seg_tri_strict), so an input with no crossing pairs gives none.
+   Each vertex queues its cheapest target that passes the cheap refusals (turn, edge, angle, fold); distance and
+   crossing are tried when it comes up, and on a refusal the next-best target is queued. Stops at `target` vertices or
+   when nothing more is allowed. keep (optional, a byte per vertex): 0 free; 1 or 3 never removed; 2 a seam vertex,
+   removed only along the seam (onto a 2 or 3, the held side's triangles staying in their planes). An open surface's
+   rim vertex goes only along the rim. clean (1): a triangle caught in a crossing (before decimation) or under minalt
+   high (after) is removed by collapsing one of its edges under the same refusals; one that still stands is tried once
+   more under the link, keep, seam and crossing refusals alone (a needle only by an edge under 20 minalt).
+   Experimental: its results may change between releases. Single-threaded.
+   Size: the marks are 32-bit stamps, about 48 per collapse on an icosphere; past 2^32 of them (about 9e7 collapses, an
+   input near 1e8 vertices) a stale mark can read as current. */
 #ifndef MK_DEC_H
 #define MK_DEC_H
 #include "mk_geom.h"
@@ -38,25 +38,30 @@ typedef struct {
     double maxedge;  /* the longest new edge; 0: none */
     double minangle; /* degrees, the smallest new angle; 0: none */
     double fold;     /* degrees: the second fold threshold (over 90 always counts); 0: only 90 */
-    double turn;     /* a triangle's normal keeps a cosine of at least this with its old one and the input's (0.2) */
+    double turn;     /* a triangle's normal keeps a cosine of at least this with its old one and the input's */
     double minalt;   /* the clean-up's needle height; 0: no needles removed */
     int target;      /* stop at this many vertices; 0: when nothing more is allowed */
     int clean;       /* 1: the crossing and needle clean-up */
-    const unsigned char *keep;                 /* NULL, or a byte a vertex (0, 1, 2, 3) */
+    const unsigned char *keep;                 /* NULL, or a byte per vertex (0, 1, 2, 3: see the top) */
     int nregion;                               /* 1, or up to MK_DEC_REGIONS with region */
-    int (*region)(const double *p, void *ctx); /* the region of an edge's midpoint, 0 .. nregion - 1 */
+    int (*region)(const double *p, void *ctx); /* the region of a point (an edge's midpoint, a triangle's centroid),
+                                                  0 .. nregion - 1; any other value counts as 0 */
     void *region_ctx;
 } mk_dec_opts;
 typedef struct {
-    int nv, nt;      /* the result's */
+    int nv, nt;      /* the result's vertex and triangle counts */
     double maxown;   /* the largest distance of a removed input vertex from the triangle that owns it */
-    double fold0[MK_DEC_REGIONS][2], fold1[MK_DEC_REGIONS][2]; /* fold lengths over 90 and over `fold` degrees, before and after */
+    /* fold lengths by region, over 90 and over `fold` degrees, before and after; areas by region, before and after */
+    double fold0[MK_DEC_REGIONS][2], fold1[MK_DEC_REGIONS][2];
     double area0[MK_DEC_REGIONS], area1[MK_DEC_REGIONS];
-    long refused[8]; /* link, turn, edge, angle, fold, owned distance, sample distance, crossing */
+    long refused[8]; /* refusals by: link, turn, edge, angle, fold, owned distance, sample distance, crossing */
+    /* clean-up: triangles removed and left before decimation, removed and left after; removals by the relaxed try */
     long clean_before, left_before, clean_after, left_after, relaxed;
     long rim0, rim1; /* an open surface's rim vertices before and after */
 } mk_dec_report;
 
+/* defaults for a mesh in which one millimetre is mm units: dist 0.3 mm, maxedge 4 mm, minangle 5, fold 80, turn 0.2,
+   minalt 0.001 mm, clean on, one region */
 static inline void mk_dec_defaults(mk_dec_opts *o, double mm)
 {
     memset(o, 0, sizeof *o);
@@ -82,7 +87,7 @@ static inline double mk_dmax_cos_(mk_dv3_ a, mk_dv3_ b, mk_dv3_ c)
     const double ca = -mk_ddot_(e0, e2) / (l0 * l2), cb = -mk_ddot_(e0, e1) / (l0 * l1), cc = -mk_ddot_(e1, e2) / (l1 * l2);
     return fmax(ca, fmax(cb, cc));
 }
-/* an edge pq through triangle abc's interior: mk_geom's mk_seg_tri_strict (1.5.2: the one crossing test; this one moved there) */
+/* an edge pq through triangle abc's interior (mk_seg_tri_strict) */
 static inline int mk_dec_segtri_(mk_dv3_ p, mk_dv3_ q, mk_dv3_ a, mk_dv3_ b, mk_dv3_ c)
 {
     const double P[3] = {p.x, p.y, p.z}, Q[3] = {q.x, q.y, q.z}, A[3] = {a.x, a.y, a.z}, B[3] = {b.x, b.y, b.z}, C[3] = {c.x, c.y, c.z};
@@ -94,7 +99,7 @@ typedef struct {
     const double *P;
     int nv, nt, nreg, relax, oom, gh;
     int *F, *OT, **VT, *NVT, *CVT, *STAMP;
-    unsigned *MARK, MARKS, *TMARK, TMARKS; /* marks wrap (the verification work D-3: as int, MARKS overflowed after about 6e7 collapses) */
+    unsigned *MARK, MARKS, *TMARK, TMARKS; /* unsigned, so the marks wrap rather than overflow */
     double *N0, *Q;
     unsigned char *deadv, *deadt, *bnd;
     const unsigned char *keep;
@@ -143,7 +148,7 @@ static inline void mk_dec_fan_del_(mk_dec_ *c, int v, int t)
 static inline int mk_dec_nbrs_(mk_dec_ *c, int u, int *nb)
 {
     int n = 0;
-    c->MARKS += 2; /* 1.6.0: past mk_dec_cheap_'s MARKS + 1 (the review's D1: with ++ its common vertices read as seen) */
+    c->MARKS += 2; /* past mk_dec_cheap_'s MARKS + 1, so its common vertices do not read as seen */
     for (int i = 0; i < c->NVT[u]; i++)
         for (int k = 0; k < 3; k++) {
             const int x = mk_dec_f_(c, c->VT[u][i])[k];
@@ -158,7 +163,8 @@ static inline int mk_dec_region_(const mk_dec_ *c, mk_dv3_ m)
     const int r = c->o->region(p, c->o->region_ctx);
     return r >= 0 && r < c->nreg ? r : 0;
 }
-/* the fold lengths among the edges of fan(u) and fan(v): out[r][0] over 90 degrees, out[r][1] over fold; after: u moved onto v */
+/* the fold lengths among the edges of fan(u) and fan(v): out[r][0] over 90 degrees, out[r][1] over fold; after: u moved
+   onto v */
 static inline void mk_dec_foldsum_(mk_dec_ *c, int u, int v, int after, double out[MK_DEC_REGIONS][2])
 {
     int n = 0;
@@ -205,9 +211,10 @@ static inline void mk_dec_foldsum_(mk_dec_ *c, int u, int v, int after, double o
             if (d < c->cos2) out[r][1] += L;
         }
 }
-/* the crossing grid: an insert-only hash of cells (side gs) whose entries carry the triangle's version. A triangle whose box
-   covers more than MK_DEC_BIG cells is listed once, in cell (-1, -1, -1), which every query reads; such a new triangle reads
-   every live one instead of its cells (the verification work D-2: one large triangle among small ones filled memory with its box's cells). */
+/* the crossing grid: an insert-only hash of cells (side gs) whose entries carry the triangle's version. A triangle
+   whose box covers more than MK_DEC_BIG cells is listed once, in cell (-1, -1, -1), which every query reads; such a new
+   triangle reads every live one instead of its cells, so one large triangle among small ones does not fill memory with
+   its box's cells. */
 #define MK_DEC_BIG 4096
 static inline int mk_dec_cells_(const mk_dec_ *c, const mk_dv3_ *d, int lo[3], int hi[3])
 {
@@ -215,7 +222,7 @@ static inline int mk_dec_cells_(const mk_dec_ *c, const mk_dv3_ *d, int lo[3], i
     const double mx[3] = {fmax(d[0].x, fmax(d[1].x, d[2].x)), fmax(d[0].y, fmax(d[1].y, d[2].y)), fmax(d[0].z, fmax(d[1].z, d[2].z))};
     for (int k = 0; k < 3; k++) lo[k] = (int)floor((mn[k] - c->glo[k]) / c->gs), hi[k] = (int)floor((mx[k] - c->glo[k]) / c->gs);
 #if defined(MK_MUTATE) && MK_MUTATE == 227
-    return 0; /* 227: every triangle entered in every cell of its box (1.5.3) */
+    return 0; /* 227: every triangle entered in every cell of its box */
 #endif
     return (double)(hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > MK_DEC_BIG;
 }
@@ -262,7 +269,7 @@ static inline int mk_dec_xone_(mk_dec_ *c, const mk_dv3_ *d, const int *g, int s
     const int *f = mk_dec_f_(c, t);
     const mk_dv3_ tt[3] = {mk_dec_pt_(c, f[0]), mk_dec_pt_(c, f[1]), mk_dec_pt_(c, f[2])};
 #if defined(MK_MUTATE) && MK_MUTATE == 163
-    return 0; /* the crossing test left out */
+    return 0; /* 163: the crossing test left out */
 #endif
     for (int k = 0; k < 3; k++)
         if (mk_dec_segtri_(d[k], d[(k + 1) % 3], tt[0], tt[1], tt[2]) || mk_dec_segtri_(tt[k], tt[(k + 1) % 3], d[0], d[1], d[2])) return 1;
@@ -295,7 +302,8 @@ static inline int mk_dec_cheap_(mk_dec_ *c, int u, int v)
     if (c->deadv[u] || c->deadv[v] || u == v || c->NVT[u] >= MK_DEC_MAXN || c->NVT[v] >= MK_DEC_MAXN) return 0;
 #if !defined(MK_MUTATE) || MK_MUTATE != 165
     if (K && (K[u] & 1)) return 0;
-    if (K && K[u] == 2) { /* a seam vertex: onto a seam vertex or a cut point, one held-side triangle dying, the others in their planes */
+    /* a seam vertex: onto a seam vertex or a cut point, one held-side triangle dying, the others in their planes */
+    if (K && K[u] == 2) {
         if (K[v] < 2) return 0;
         int die = 0;
         for (int i = 0; i < c->NVT[u]; i++) {
@@ -411,8 +419,8 @@ static inline int mk_dec_full_(mk_dec_ *c, int u, int v)
                     if (d2 < bd) bd = d2, bt = c->ntb[j];
                 }
 #if !defined(MK_MUTATE) || MK_MUTATE != 201
-                /* 1.5.2: every triangle of u's holds v (a rim ear), so no new triangle can own what u owns: in the clean-up's relaxed
-                   try the nearest of v's triangles that stays does (1.5.0 left the owner -1 and wrote before ohead) */
+                /* when every triangle of u's holds v (a rim ear), no new triangle can own what u owns: in the
+                   clean-up's relaxed try the nearest of v's triangles that stays owns it */
                 for (int i2 = 0; !m && c->relax && i2 < c->NVT[v]; i2++) {
                     const int t2 = c->VT[v][i2], *g2 = mk_dec_f_(c, t2);
                     if (mk_dec_has_(c, t2, u)) continue;
@@ -466,8 +474,8 @@ static inline int mk_dec_full_(mk_dec_ *c, int u, int v)
         for (int k = 0; k < 3; k++) d[k] = mk_dv_(c->nc[j][3 * k], c->nc[j][3 * k + 1], c->nc[j][3 * k + 2]), g[k] = f[k] == u ? v : f[k];
         if (mk_dec_crosses_(c, d, g, u)) { c->ref[7]++; return 0; }
     }
-#if !(defined(MK_MUTATE) && MK_MUTATE == 229) /* 229: counted before the crossing test can refuse the collapse (1.5.3) */
-    if (worst > c->maxown2) c->maxown2 = worst; /* only a collapse that happens (the verification work D-6) */
+#if !(defined(MK_MUTATE) && MK_MUTATE == 229) /* 229: counted before the crossing test can refuse the collapse */
+    if (worst > c->maxown2) c->maxown2 = worst; /* only a collapse that happens counts */
 #endif
     c->pend_u = u, c->pend_v = v;
     return 1;
@@ -645,12 +653,12 @@ static inline void mk_dec_free_(mk_dec_ *c)
     mk_bvh_free(&c->ob);
 }
 
-/* decimate (V[3 nv], T[3 nt]) under o (NULL: mk_dec_defaults with mm = 1e-3, metres). Out: alive[nv] (1 kept, 0 removed) and the
-   result's faces To[3 nt] (capacity 3 nt) in the input's vertex numbers, *nto of them. 0, or -1 for a bad mesh (a size under 1 or
-   over INT_MAX / 4, an index out of range, a face with a repeated corner, a coordinate not finite, or coordinates past 2^30 grid
-   cells), bad options (a negative or NaN bound, turn outside [-1, 1], minangle or fold outside [0, 180), nregion outside 1 ..
-   MK_DEC_REGIONS or above 1 without region, target < 0), or no memory; alive and To are then untouched and *rep zeroed. rep may
-   be NULL. */
+/* Decimates (V[3 nv], T[3 nt]) under o (NULL: mk_dec_defaults with mm = 1e-3, metres). Out, in the caller's arrays:
+   alive[nv] (1 kept, 0 removed) and the result's *nto faces in To (capacity 3 nt ints) in the input's vertex numbers;
+   *rep if rep is not NULL. Returns 0, or -1 for a bad mesh (a size under 1 or over INT_MAX / 4, an index out of range,
+   a face with a repeated corner, a coordinate not finite, or coordinates past 2^30 grid cells), bad options (a negative
+   or NaN bound, turn outside [-1, 1], minangle or fold outside [0, 180), nregion outside 1 .. MK_DEC_REGIONS or above 1
+   without region, target < 0), or no memory; alive and To are then untouched and *rep zeroed. */
 static inline int mk_decimate(const double *V, int nv, const int *T, int nt, const mk_dec_opts *o, unsigned char *alive, int *To, int *nto,
                               mk_dec_report *rep)
 {
@@ -683,9 +691,10 @@ static inline int mk_decimate(const double *V, int nv, const int *T, int nt, con
     mk_dec_ c = {0};
     c.P = V, c.nv = nv, c.nt = nt, c.o = o, c.keep = o->keep, c.nreg = o->nregion, c.pend_u = c.pend_v = -1;
 #if defined(MK_MUTATE) && MK_MUTATE == 228
-    c.dist2 = o->dist * o->dist, c.mindot = o->turn; /* 228: a small bound squares to 0, which means none (1.5.3) */
+    c.dist2 = o->dist * o->dist, c.mindot = o->turn; /* 228: a small bound squares to 0, which means none */
 #else
-    c.dist2 = o->dist > 0 ? fmax(o->dist * o->dist, 0x1p-1074) : 0, c.mindot = o->turn; /* a positive bound stays one (the verification work D-5) */
+    /* a positive bound stays positive when squared */
+    c.dist2 = o->dist > 0 ? fmax(o->dist * o->dist, 0x1p-1074) : 0, c.mindot = o->turn;
 #endif
     c.maxedge2 = o->maxedge > 0 ? fmax(o->maxedge * o->maxedge, 0x1p-1074) : 0;
     c.cos2 = o->fold > 0 ? cos(o->fold * 3.14159265358979323846 / 180) : 0, c.cmin = o->minangle > 0 ? cos(o->minangle * 3.14159265358979323846 / 180) : 2;
@@ -694,7 +703,7 @@ static inline int mk_decimate(const double *V, int nv, const int *T, int nt, con
 #if defined(MK_MUTATE) && MK_MUTATE == 227
     c.gs = c.gc;
 #else
-    c.gs = fmax(c.gc, 0.5 * el); /* the verification work D-2: an input triangle covers a few cells */
+    c.gs = fmax(c.gc, 0.5 * el); /* at least half the mean edge: an input triangle covers a few cells */
 #endif
     for (int k = 0; k < 3; k++) {
         c.glo[k] = lo[k];

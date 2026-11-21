@@ -1,35 +1,33 @@
-/* mathkit: a triangle mesh to a signed distance grid, negative inside (s-bone's meshsdf, Batty's SDFGen 2007, with the
-   house's other copies merged in; cudakit's sd_ primitives use the same sign). Double-precision mesh in mk_geom's layout
-   (V[3 nv], T[3 nt]); float distances on the nodes lo + h (i, j, k), index (k n1 + j) n0 + i. Stored as float:
-   a distance beyond FLT_MAX (3.4e38) reads inf, and one is rounded to 24 bits (the verification work S-E).
-   Distance: the exact distance to the nearest triangle (mk_geom's mk_closest_pt_tri, Ericson 5.1.5) on the nodes within two
-   cells of each triangle, then the nearest triangle passed on in two rounds of eight sweeps, each node keeping the nearest
-   of its seven sweep-neighbours' triangles. Far from the mesh this is the distance to a triangle that is nearest or nearly so
-   (within about 0.05 h on the tests); MK_SDF_EXACT then makes every node exact through mk_geom's BVH, the sweeps' value
+/* mathkit: a triangle mesh to a signed distance grid, negative inside (after Batty's SDFGen, 2007). Header only, C23.
+   mk_sdf_mesh grids the mesh's box plus a margin, mk_sdf_mesh_box a given box; mk_sdf_sample interpolates; mk_sdf_free
+   frees. The mesh is double precision in mk_geom's layout (V[3 nv], T[3 nt]). Distances are float (rounded to 24 bits;
+   beyond FLT_MAX, 3.4e38, they read inf), on the nodes lo + h (i, j, k) at index (k n1 + j) n0 + i.
+   Distance: exact (mk_closest_pt_tri; Ericson 2005, 5.1.5) on the nodes within two cells of each triangle, then the
+   nearest triangle passed on in two rounds of eight sweeps, each node keeping the nearest of its seven
+   sweep-neighbours' triangles. Far from the mesh this is the distance to a triangle that is nearest or nearly so
+   (within about 0.05 h on the tests); MK_SDF_EXACT makes every node exact through mk_geom's tree, the sweeps' value
    bounding each search.
-   Sign: the parity of a ray's crossings along the first axis through each row of nodes, the rows set off a fraction of h
-   from the nodes so no ray runs through a node, and the crossings bucketed by row and sorted along it (body-claude's sdfgrid
-   tested every triangle for every row). A closed mesh crosses every whole row an even number of times; a row that crosses
-   an odd number (a ray through an edge, a hole, a non-manifold edge) cannot be trusted. It is cast again on two nearby rays
-   (O(triangles) each); if both are odd too, its nodes take the sign of the generalized winding number (mk_geom's
-   mk_winding_number: |w| > 1/2 is inside), which also covers a mesh that is not watertight, at O(triangles) for each node of
-   such a row. A node nearer the mesh than the rays' offset (2.7e-4 h; the test is 4e-4 h) may lie on the other side of its
-   ray: it gets a ray of its own, set off by 1/50 of its distance, so every point between is on its side (the winding number
-   if that ray is odd). The counts are reported. MK_SDF_FILL (sdfgrid's FILL, experiment/cfd levelset.h's flood): outside
-   nodes that no path of outside nodes joins to the grid's faces are made inside (pockets of a surface that folds through itself, or
-   covers a region twice; it fills a real cavity too, so it is for solids without one). MK_SDF_LATTICE puts the nodes on the
-   world lattice h Z^3 (metal/ref/hair hairgen.c), so grids of one mesh with other margins, or of a cut of it, share nodes.
-   mk_sdf_mesh_box (1.5.2, the maintainer's race-c1 H3 sdfbox): the same grid on a box's nodes only, a local field on a large mesh; on
-   the lattice its nodes are the whole grid's, and with MK_SDF_EXACT their values too, bit for bit.
-   Threads (mk_par.h, with -fopenmp), each giving 1.4.0's grid bit for bit at any thread count: the band by tiles of 8 x 8
-   rows, each tile taking its triangles in index order, so every node sees its triangles in the serial order; the sweeps as a
-   wavefront of 4 x 4 tiles of rows (a row needs only the rows before it in the sweep, which are done); MK_SDF_EXACT, the odd rows'
-   winding numbers and the near nodes node by node; the rows' parity row by row. The crossings' sort and MK_SDF_FILL's
-   flood are serial. Header only, C23. */
+   Sign: the parity of a ray's crossings along the first axis through each row of nodes. The rays are set off a fraction
+   of h from the nodes so none runs through a node; the crossings are bucketed by row and sorted along it. A closed mesh
+   crosses every row an even number of times. A row with an odd count (a ray through an edge, a hole, a non-manifold
+   edge) is cast again on two nearby rays (O(triangles) each); if both are odd too, its nodes take the sign of the
+   generalized winding number (|w| > 1/2 is inside), which also covers a mesh that is not watertight, at O(triangles)
+   per node of such a row. A node nearer the mesh than the rays' offset (2.7e-4 h; the test uses 4e-4 h) may lie on the
+   other side of its ray: it gets a ray of its own, set off by 1/50 of its distance, so every point between is on its
+   side (the winding number if that ray is odd). The counts are reported in mk_sdf.
+   MK_SDF_FILL makes inside the outside nodes that no path of outside nodes joins to the grid's faces (pockets of a
+   surface that folds through itself or covers a region twice; it fills a real cavity too, so it is for solids without
+   one). MK_SDF_LATTICE puts the nodes on the world lattice h Z^3, so grids of one mesh with other margins or boxes, or
+   of a cut of it, share nodes: mk_sdf_mesh_box's nodes are then the whole grid's, and with MK_SDF_EXACT their values
+   too, bit for bit.
+   Threads (mk_par.h, with -fopenmp): the grid is the same bit for bit at any thread count. The band runs by tiles of
+   rows, the sweeps as a wavefront of tiles, MK_SDF_EXACT, the winding numbers and the near nodes node by node, the
+   parity row by row; the crossings' sort and MK_SDF_FILL's flood are serial. Stable: calls and results do not change
+   between releases. */
 #ifndef MK_SDF_H
 #define MK_SDF_H
 #if defined(MK_MUTATE) && MK_MUTATE == 145
-#define MK_SDF_MUT145_ 1 /* the near nodes keep the parity's sign */
+#define MK_SDF_MUT145_ 1 /* 145: the near nodes keep the parity's sign */
 #else
 #define MK_SDF_MUT145_ 0
 #endif
@@ -46,9 +44,9 @@ typedef struct {
     int n[3];        /* nodes along each axis */
     double lo[3], h; /* node (0, 0, 0), the spacing */
     double in[6];    /* the mesh's box: lo x y z, hi x y z */
-    float *d;        /* n0 n1 n2 signed distances (malloc'd: mk_sdf_free, or take it and free it yourself) */
+    float *d;        /* n0 n1 n2 signed distances (malloc'd: mk_sdf_free, or take it and free() it yourself) */
     long odd_rows;   /* rows odd on three nearby rays (a hole, a non-manifold edge): signed by the winding number */
-    long reray;      /* rows odd on the first ray but even on a nearby one (a ray through an edge): signed by that one */
+    long reray;      /* rows odd on the first ray, even on a nearby one (a ray through an edge): signed by that one */
     long filled;     /* MK_SDF_FILL: enclosed outside nodes made inside */
     long near;       /* nodes nearer the mesh than 4e-4 h, signed by a ray of their own (or the winding number) */
 } mk_sdf;
@@ -60,10 +58,10 @@ static inline int mk_sdf_cmp_(const void *a, const void *b)
     const mk_sdf_cross_ *x = a, *y = b;
     return x->row != y->row ? (x->row < y->row ? -1 : 1) : (x->x > y->x) - (x->x < y->x);
 }
-/* the crossings of the ray along x through (y, z) with every triangle, ascending in *xs (grown as needed); their count, or -1
-   for no memory. O(triangles). */
 typedef struct { double x; int s; } mk_sdf_x_; /* a crossing along a row: where, and the sign of the face normal's x */
 static inline int mk_sdf_dcmp_(const void *a, const void *b) { const double x = ((const mk_sdf_x_ *)a)->x, y = ((const mk_sdf_x_ *)b)->x; return (x > y) - (x < y); }
+/* the crossings of the ray along x through (y, z) with every triangle, ascending in *xs (grown as needed): their count,
+   or -1 for no memory. O(triangles). */
 static inline long mk_sdf_rowx_(const double *V, const int *T, int nt, double y, double z, mk_sdf_x_ **xs, size_t *cap)
 {
     long m = 0;
@@ -91,23 +89,24 @@ static inline double mk_sdf_tri_(const double *V, const int *T, int f, const dou
     const double *a = V + 3 * (size_t)T[3 * (size_t)f], *b = V + 3 * (size_t)T[3 * (size_t)f + 1], *c = V + 3 * (size_t)T[3 * (size_t)f + 2];
     double w[3], q[3];
 #if defined(MK_MUTATE) && MK_MUTATE == 143
-    return mk_closest_pt_tri(p, a, b, c, w, q); /* the squared distance */
+    return mk_closest_pt_tri(p, a, b, c, w, q); /* 143: the squared distance */
 #else
     return sqrt(mk_closest_pt_tri(p, a, b, c, w, q));
 #endif
 }
 
-/* the grid's node places, for the block functions the threads run */
+/* the grid's node positions, for the block functions the threads run */
 typedef struct { int n[3], lat; double lo[3], bi[3], h; } mk_sdf_lat_;
 static inline double mk_sdf_p_(const mk_sdf_lat_ *L, int a, long i) { return L->lat ? (L->bi[a] + (double)i) * L->h : L->lo[a] + (double)i * L->h; }
 static inline size_t mk_sdf_id_(const mk_sdf_lat_ *L, long i, long j, long k) { return (size_t)i + (size_t)L->n[0] * ((size_t)j + (size_t)L->n[1] * (size_t)k); }
-/* x as an int clamped to [lo, hi] before the conversion (NaN: lo). the verification work S-2: in a box's grid (mk_sdf_mesh_box) a triangle can lie
-   more than INT_MAX cells from node 0, and (int) of such a cell index is undefined (x86: INT_MIN), which lost its band and its
-   crossings, so whole rows took the wrong sign. Within the grid it is the plain conversion, so every grid is as before. */
+/* x as an int, clamped to [lo, hi] before the conversion (NaN gives lo). In a box's grid (mk_sdf_mesh_box) a triangle
+   can lie more than INT_MAX cells from node 0, and (int) of such a cell index is undefined (x86 gives INT_MIN), which
+   would lose the triangle's band and crossings and give whole rows the wrong sign. Within the grid it is the plain
+   conversion. */
 static inline int mk_sdf_ci_(double x, int lo, int hi)
 {
 #if defined(MK_MUTATE) && MK_MUTATE == 237
-    if (!(fabs(x) < 2147483647.0)) return lo; /* 237: a cell past an int is lost, as the cast's INT_MIN lost it (1.5.3) */
+    if (!(fabs(x) < 2147483647.0)) return lo; /* 237: a cell index past an int is lost, as a plain cast loses it */
 #endif
     return !(x >= lo) ? lo : x > hi ? hi : (int)x;
 }
@@ -121,8 +120,8 @@ static inline void mk_sdf_trange_(const double *V, const int *T, int f, const mk
     }
 }
 enum { MK_SDF_TILE = 8 }; /* the band's tiles: 8 x 8 rows (j, k), a size fixed by the kit, not by the thread count */
-/* the band on the tile of rows j in [j0, j1), k in [k0, k1): its triangles list[0 .. n) in index order, each putting its exact
-   distance on its nodes there */
+/* the band on the tile of rows j in [j0, j1), k in [k0, k1): its triangles list[0 .. n) in index order, each putting
+   its exact distance on its nodes there */
 static inline void mk_sdf_band_tile_(const double *V, const int *T, const int *list, long n, const mk_sdf_lat_ *L, int j0, int j1, int k0, int k1,
                                      float *phi, int *near)
 {
@@ -141,8 +140,9 @@ static inline void mk_sdf_band_tile_(const double *V, const int *T, const int *l
                 }
     }
 }
-/* one sweep (di, dj, dk) along row (j, k): each node takes the nearest of its seven sweep-neighbours' triangles. The row reads
-   the rows (j - dj, k), (j, k - dk) and (j - dj, k - dk), so rows on one diagonal of the sweep can run at once. */
+/* one sweep (di, dj, dk) along row (j, k): each node takes the nearest of its seven sweep-neighbours' triangles. The
+   row reads the rows (j - dj, k), (j, k - dk) and (j - dj, k - dk), so rows on one diagonal of the sweep can run at
+   once. */
 static inline void mk_sdf_sweep_row_(const double *V, const int *T, const mk_sdf_lat_ *L, float *phi, int *near, int j, int k, int di, int dj, int dk)
 {
     const int nx = L->n[0], ia = di > 0 ? 1 : nx - 2, ib = di > 0 ? nx : -1;
@@ -160,8 +160,9 @@ static inline void mk_sdf_sweep_row_(const double *V, const int *T, const mk_sdf
     }
 }
 enum { MK_SDF_STILE = 4 }; /* the sweeps' tiles: 4 x 4 rows, so a sweep waits on its diagonals of tiles, not of rows */
-/* one sweep over the tile of rows r in [r0, r0 + 4), q in [q0, q0 + 4) counted in the sweep's order (row ja + r dj, plane
-   ka + q dk; mj, mk rows in all): each row after the rows before it in the tile, the tiles before it being done */
+/* one sweep over the tile of rows r in [r0, r0 + 4), q in [q0, q0 + 4) counted in the sweep's order (row ja + r dj,
+   plane ka + q dk; mj, mk rows in all): each row after the rows before it in the tile, the tiles before it being
+   done */
 static inline void mk_sdf_sweep_tile_(const double *V, const int *T, const mk_sdf_lat_ *L, float *phi, int *near, int r0, int q0, int mj, int mk, int ja, int ka,
                                       int di, int dj, int dk)
 {
@@ -180,8 +181,9 @@ static inline void mk_sdf_exact_blk_(const mk_bvh *B, const mk_sdf_lat_ *L, floa
         if (tri >= 0 && sqrt(d2) < phi[id]) phi[id] = (float)sqrt(d2);
     }
 }
-/* one row's sign from its crossings cr[0 .. m), sorted along the row: 0 signed by their parity, 1 by a nearby ray (theirs were
-   odd), 2 odd on that ray too (the winding number signs it later), -1 no memory. *xs is the thread's own buffer. */
+/* one row's sign from its crossings cr[0 .. m), sorted along the row: 0 signed by their parity, 1 by a nearby ray
+   (theirs were odd), 2 odd on that ray too (the winding number signs it later), -1 no memory. *xs is the thread's own
+   buffer. */
 static inline int mk_sdf_row_(const double *V, const int *T, int nt, const mk_sdf_lat_ *L, const mk_sdf_cross_ *cr, long m, double oy, double oz, float *phi,
                               mk_sdf_x_ **xs, size_t *capx)
 {
@@ -215,8 +217,8 @@ static inline int mk_sdf_row_(const double *V, const int *T, int nt, const mk_sd
     }
     return 1;
 }
-/* the odd rows' nodes [n0, n1) of rows[] (row j + ny k each), nx a row: each node's own winding number (through a hole it changes
-   smoothly, not by a step at a crossing, so it cannot be carried along the row) */
+/* the odd rows' nodes [n0, n1) of rows[] (row j + ny k each), nx a row: each node's own winding number (through a hole
+   it changes smoothly, not by a step at a crossing, so it cannot be carried along the row) */
 static inline void mk_sdf_wind_blk_(const double *V, const int *T, int nt, const mk_sdf_lat_ *L, const int64_t *rows, float *phi, long n0, long n1)
 {
     for (long q = n0; q < n1; q++) {
@@ -225,8 +227,8 @@ static inline void mk_sdf_wind_blk_(const double *V, const int *T, int nt, const
         if (fabs(mk_winding_number(V, T, nt, p)) > 0.5) phi[mk_sdf_id_(L, i, j, k)] = -phi[mk_sdf_id_(L, i, j, k)];
     }
 }
-/* a node nearer the mesh than the rays' offset: its sign from a ray set off by 1/50 of its distance (the winding number if that
-   ray is odd). 0, or -1 for no memory. */
+/* a node nearer the mesh than the rays' offset: its sign from a ray set off by 1/50 of its distance (the winding number
+   if that ray is odd). 0, or -1 for no memory. */
 static inline int mk_sdf_near_(const double *V, const int *T, int nt, const mk_sdf_lat_ *L, size_t id, float *phi, mk_sdf_x_ **xs, size_t *capx)
 {
     const int i = (int)(id % (size_t)L->n[0]), j = (int)(id / (size_t)L->n[0] % (size_t)L->n[1]), k = (int)(id / ((size_t)L->n[0] * (size_t)L->n[1]));
@@ -257,9 +259,10 @@ static inline int mk_sdf_check_(const double *V, int nv, const int *T, int nt, d
     return 0;
 }
 static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags, size_t N, double extra, mk_sdf *g);
-/* fill g for the mesh with cell h and margin beyond the mesh's box on every side. 0, or -1 for a bad mesh (nv or nt < 1, an
-   index out of range, a coordinate not finite), h not finite and > 0, margin not finite and >= 0, a grid whose node count
-   overflows (refused before anything is allocated), or no memory; *g is then empty. */
+/* Fills g for the mesh (nv vertices, nt triangles) with node spacing h over the mesh's box plus margin on every side;
+   flags any of MK_SDF_FILL, MK_SDF_EXACT, MK_SDF_LATTICE. Returns 0, or -1 with *g zeroed for a bad mesh (nv or nt < 1,
+   an index out of range, a coordinate not finite), h not finite and > 0, margin not finite and >= 0, a node count that
+   overflows (refused before anything is allocated), or no memory. Free g with mk_sdf_free. */
 static inline int mk_sdf_mesh(const double *V, int nv, const int *T, int nt, double h, double margin, int flags, mk_sdf *g)
 {
     memset(g, 0, sizeof *g);
@@ -268,7 +271,7 @@ static inline int mk_sdf_mesh(const double *V, int nv, const int *T, int nt, dou
     const double *lo = in, *hi = in + 3;
     size_t N = 1;
     for (int a = 0; a < 3; a++) {
-        /* MK_SDF_LATTICE (metal/ref/hair hairgen.c): node 0 on the world lattice h Z, so a cut or shifted mesh keeps its nodes */
+        /* MK_SDF_LATTICE: node 0 on the world lattice h Z, so a cut or shifted mesh keeps its nodes */
         const double o = flags & MK_SDF_LATTICE ? floor((lo[a] - margin) / h) * h : lo[a] - margin;
         const double m = flags & MK_SDF_LATTICE ? ceil((hi[a] + margin - o) / h) + 1 : ceil((hi[a] - lo[a] + 2 * margin) / h) + 1;
         if (!(m >= 1 && m <= INT_MAX - 1)) { memset(g, 0, sizeof *g); return -1; }
@@ -279,13 +282,13 @@ static inline int mk_sdf_mesh(const double *V, int nv, const int *T, int nt, dou
     g->h = h;
     return mk_sdf_grid_(V, T, nt, flags, N, 0, g);
 }
-/* 1.5.2: the same on the nodes of a box (lo x y z, hi x y z) instead of the mesh's whole box: a local field on a large mesh (the maintainer's
-   race-c1 H3 grids a few cm round one contact of a muscle whose own box is 400 M nodes at 0.5 mm; mk_graft's patch needs only the
-   seam's neighbourhood). Node 0 at lo (MK_SDF_LATTICE: on the world lattice at or below lo), nodes to hi or just past it. Every
-   triangle still counts: a row's sign from all its crossings, inside the box or not. A node no triangle comes within two cells
-   of the box's nodes to reach takes the distance to the nearest one that does (an upper bound; MK_SDF_EXACT makes every node
-   exact). MK_SDF_FILL is refused (its flood starts at the grid's faces, which a box may cut inside the mesh). -1 as mk_sdf_mesh,
-   or for a box not finite or with hi below lo. */
+/* mk_sdf_mesh on the nodes of a box (lo x y z, hi x y z) instead of the mesh's whole box: a local field on a large
+   mesh, e.g. round one contact, or a seam for mk_graft. Node 0 at lo (MK_SDF_LATTICE: on the world lattice at or below
+   lo), nodes to hi or just past it. Every triangle still counts: a row's sign comes from all its crossings, inside the
+   box or not. A node that no triangle reaches within two cells takes its distance from the triangles that do reach the
+   box's nodes (an upper bound; MK_SDF_EXACT makes every node exact). MK_SDF_FILL is refused (its flood starts at the
+   grid's faces, which a box may cut inside the mesh). -1 as mk_sdf_mesh, or for a box not finite or with hi below
+   lo. */
 static inline int mk_sdf_mesh_box(const double *V, int nv, const int *T, int nt, double h, const double box[6], int flags, mk_sdf *g)
 {
     memset(g, 0, sizeof *g);
@@ -295,9 +298,11 @@ static inline int mk_sdf_mesh_box(const double *V, int nv, const int *T, int nt,
     double extra = 0;
     for (int a = 0; a < 3; a++) {
 #if defined(MK_MUTATE) && MK_MUTATE == 236
-        if (!isfinite(box[a]) || !isfinite(box[3 + a]) || !(box[3 + a] >= box[a])) return -1; /* 236: axes before it left set (1.5.3) */
+        /* 236: the axes before this one left set in *g */
+        if (!isfinite(box[a]) || !isfinite(box[3 + a]) || !(box[3 + a] >= box[a])) return -1;
 #else
-        if (!isfinite(box[a]) || !isfinite(box[3 + a]) || !(box[3 + a] >= box[a])) { memset(g, 0, sizeof *g); return -1; } /* the verification work S-1: axes before it were set */
+        /* *g cleared: the axes before this one are already set */
+        if (!isfinite(box[a]) || !isfinite(box[3 + a]) || !(box[3 + a] >= box[a])) { memset(g, 0, sizeof *g); return -1; }
 #endif
         const double o = flags & MK_SDF_LATTICE ? floor(box[a] / h) * h : box[a], m = ceil((box[3 + a] - o) / h) + 1;
         if (!(m >= 1 && m <= INT_MAX - 1)) { memset(g, 0, sizeof *g); return -1; }
@@ -305,14 +310,15 @@ static inline int mk_sdf_mesh_box(const double *V, int nv, const int *T, int nt,
         if ((size_t)g->n[a] > SIZE_MAX / sizeof(double) / N) { memset(g, 0, sizeof *g); return -1; }
         N *= (size_t)g->n[a];
 #if !defined(MK_MUTATE) || MK_MUTATE != 207
-        extra += fmax(in[3 + a], o + (m - 1) * h) - fmin(in[a], o); /* the box and the mesh's together: no node is farther from it */
+        extra += fmax(in[3 + a], o + (m - 1) * h) - fmin(in[a], o); /* both boxes' spans: no node is farther */
 #endif
     }
     g->h = h;
     return mk_sdf_grid_(V, T, nt, flags, N, extra, g);
 }
-/* the grid's work once its nodes are set (g->n, g->lo, g->h, g->in): band, sweeps, MK_SDF_EXACT, sign, MK_SDF_FILL. extra widens
-   BIG, a node's value until a triangle reaches it, past the farthest a node lies from the mesh (0: the grid holds the mesh's box). */
+/* the grid's work once its nodes are set (g->n, g->lo, g->h, g->in): band, sweeps, MK_SDF_EXACT, sign, MK_SDF_FILL.
+   extra widens BIG, a node's value until a triangle reaches it, past the farthest a node lies from the mesh (0: the
+   grid holds the mesh's box). */
 static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags, size_t N, double extra, mk_sdf *g)
 {
     const double h = g->h;
@@ -328,11 +334,12 @@ static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags,
     const float BIG = (float)(((double)nx + ny + nz) * h + extra);
     MK_PAR_FOR_((long)N, n0, n1, mk_sdf_init_blk_(phi, near, BIG, n0, n1));
 #define MK_SDF_ID_(i, j, k) ((size_t)(i) + (size_t)nx * ((size_t)(j) + (size_t)ny * (size_t)(k)))
-    /* the band: exact distances within two cells of each triangle, by tiles of rows; each tile takes the triangles that reach it
-       in index order, so a node sees its triangles in the serial order whatever the threads */
+    /* the band: exact distances within two cells of each triangle, by tiles of rows; each tile takes the triangles that
+       reach it in index order, so a node sees its triangles in the serial order whatever the threads */
     {
 #if defined(MK_MUTATE) && MK_MUTATE == 147
-        const int nthr = MK_PAR_NTHREADS_(), sj = ny, sk = (nz + nthr - 1) / nthr; /* 147: tiles cut by the thread count, a triangle listed in its first tile only */
+        /* 147: tiles cut by the thread count, a triangle listed in its first tile only */
+        const int nthr = MK_PAR_NTHREADS_(), sj = ny, sk = (nz + nthr - 1) / nthr;
 #else
         const int sj = MK_SDF_TILE, sk = MK_SDF_TILE;
 #endif
@@ -350,9 +357,10 @@ static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags,
                 int i0[3], i1[3];
                 mk_sdf_trange_(V, T, f, &L, i0, i1);
 #if defined(MK_MUTATE) && MK_MUTATE == 208
-                if (i0[0] >= i1[0] || i0[1] >= i1[1] || i0[2] >= i1[2]) continue; /* a range one node thick taken for none */
+                /* 208: a range one node thick taken for none */
+                if (i0[0] >= i1[0] || i0[1] >= i1[1] || i0[2] >= i1[2]) continue;
 #else
-                if (i0[0] > i1[0] || i0[1] > i1[1] || i0[2] > i1[2]) continue; /* off the grid (a box): it reaches no node */
+                if (i0[0] > i1[0] || i0[1] > i1[1] || i0[2] > i1[2]) continue; /* off the grid: it reaches no node */
 #endif
 #if defined(MK_MUTATE) && MK_MUTATE == 147
                 i1[2] = i0[2];
@@ -380,7 +388,8 @@ static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags,
     if (ny > 1 && nz > 1) {
         const int mj = ny - 1, mk = nz - 1; /* rows a sweep visits along j and along k */
 #if defined(MK_MUTATE) && MK_MUTATE == 146
-        const int nthr = MK_PAR_NTHREADS_(), cs = (mk + nthr - 1) / nthr; /* 146: planes in chunks by the thread count, the last chunk first */
+        /* 146: planes in chunks by the thread count, the last chunk first */
+        const int nthr = MK_PAR_NTHREADS_(), cs = (mk + nthr - 1) / nthr;
 #endif
         MK_OMP_(omp parallel)
         for (int pass = 0; pass < 2; pass++)
@@ -408,7 +417,8 @@ static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags,
         mk_bvh B;
         if (mk_bvh_build(&B, V, T, nt)) { free(phi), memset(g, 0, sizeof *g); return -1; }
 #if defined(MK_MUTATE) && MK_MUTATE == 148
-        MK_PAR_CUT_((long)N, n0, n1, mk_sdf_exact_blk_(&B, &L, phi, n0, n1)); /* 148: nodes cut by the thread count, each piece's last node left out */
+        /* 148: nodes cut by the thread count, each piece's last node left out */
+        MK_PAR_CUT_((long)N, n0, n1, mk_sdf_exact_blk_(&B, &L, phi, n0, n1));
 #else
         const long nb = mk_par_nblk((long)N);
         MK_OMP_(omp parallel for schedule(dynamic, 1) if(nb > 1))
@@ -419,15 +429,15 @@ static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags,
 #endif
         mk_bvh_free(&B);
     }
-    /* the sign: crossings of a ray along the first axis through each row (j, k), set off from the row's nodes by fractions of
-       h; each triangle adds its crossing to the rows its (y, z) box covers */
+    /* the sign: crossings of a ray along the first axis through each row (j, k), set off from the row's nodes by
+       fractions of h; each triangle adds its crossing to the rows its (y, z) box covers */
     size_t ncr = 0, capc = 1 << 16;
     mk_sdf_cross_ *cr = malloc(sizeof *cr * capc);
     const double oy = 1.234567e-4 * h, oz = 2.345678e-4 * h;
     for (int f = 0; f < nt && cr; f++) {
         const double *A = V + 3 * (size_t)T[3 * (size_t)f], *B = V + 3 * (size_t)T[3 * (size_t)f + 1], *C = V + 3 * (size_t)T[3 * (size_t)f + 2];
         const double ymn = fmin(A[1], fmin(B[1], C[1])), ymx = fmax(A[1], fmax(B[1], C[1])), zmn = fmin(A[2], fmin(B[2], C[2])), zmx = fmax(A[2], fmax(B[2], C[2]));
-        /* clamped before the conversion (the verification work S-2: a triangle more than INT_MAX cells from a box's node 0) */
+        /* clamped before the conversion: a triangle may lie more than INT_MAX cells from a box's node 0 */
         const int j0 = mk_sdf_ci_(ceil((ymn - oy - g->lo[1]) / h), 0, ny), j1 = mk_sdf_ci_(floor((ymx - oy - g->lo[1]) / h), -1, ny - 1);
         const int k0 = mk_sdf_ci_(ceil((zmn - oz - g->lo[2]) / h), 0, nz), k1 = mk_sdf_ci_(floor((zmx - oz - g->lo[2]) / h), -1, nz - 1);
         for (int k = k0; k <= k1 && cr; k++)
@@ -448,7 +458,8 @@ static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags,
     }
     if (!cr) { free(phi), memset(g, 0, sizeof *g); return -1; }
     qsort(cr, ncr, sizeof *cr, mk_sdf_cmp_);
-    /* each row with crossings, cr[seg[s] .. seg[s + 1]), signed on its own; the rows odd on every ray then node by node */
+    /* each row with crossings, cr[seg[s] .. seg[s + 1]), signed on its own; the rows odd on every ray then node by
+       node */
     long nseg = 0;
     for (size_t c = 0; c < ncr; c++) nseg += c == 0 || cr[c].row != cr[c - 1].row;
     size_t *seg = malloc(sizeof *seg * ((size_t)nseg + 1));
@@ -476,9 +487,9 @@ static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags,
     MK_OMP_(omp parallel for schedule(dynamic, 1) if(nw > 1))
     for (long q = 0; q < nw; q++) mk_sdf_wind_blk_(V, T, nt, &L, rows, phi, q, q + 1);
     free(rows);
-    /* a node nearer the mesh than the rays' offset (4e-4 h; the offset is 2.7e-4 h) may lie on the other side of its ray: a
-       ray set off by 1/50 of its distance decides it, every point within that distance being on its side; the winding number
-       if that ray too is odd. Each such node on its own. */
+    /* a node nearer the mesh than the rays' offset (4e-4 h; the offset is 2.7e-4 h) may lie on the other side of its
+       ray: a ray set off by 1/50 of its distance decides it, every point within that distance being on its side; the
+       winding number if that ray too is odd. Each such node on its own. */
     long ncand = 0;
     for (size_t id = 0; id < N; id++) ncand += fabsf(phi[id]) < 4e-4 * h && phi[id] != 0 && !(MK_SDF_MUT145_);
     if (ncand) {
@@ -536,7 +547,8 @@ static inline int mk_sdf_grid_(const double *V, const int *T, int nt, int flags,
     g->d = phi;
     return 0;
 }
-/* the distance at p by trilinear interpolation, clamped to the grid's box; NaN at a NaN coordinate (1.6.0: 1.5.6 read node 0) */
+/* The distance at p by trilinear interpolation, p clamped to the grid's box. NaN for a NaN coordinate or a grid with no
+   data. */
 static inline double mk_sdf_sample(const mk_sdf *g, const double *p)
 {
     if (!g->d || isnan(p[0]) || isnan(p[1]) || isnan(p[2])) return NAN;

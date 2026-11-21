@@ -1,7 +1,7 @@
-/* mk_vpflow on known cases (b-helper's rows, 2026-11-15, plus the kit's): a ball (icosphere) carried by the flow of curl A,
-   A = 0.02 (sin 2 pi y cos 2 pi z, sin 2 pi z cos 2 pi x, sin 2 pi x cos 2 pi y) at the nodes of a 33^3 grid on the unit
-   cube: div u, the ball's volume, the map's Jacobian, RK4 against half the step; a rigid rotation from a quadratic potential
-   (exact answer, fourth order); a uniform flow across a periodic axis's seam; the refusals. */
+/* mk_vpflow on known cases: a ball (icosphere) carried by the flow of curl A, A = 0.02 (sin 2 pi y cos 2 pi z,
+   sin 2 pi z cos 2 pi x, sin 2 pi x cos 2 pi y) at the nodes of a 33^3 grid on the unit cube: div u, the ball's
+   volume, the map's Jacobian, RK4 against half the step; a rigid rotation from a quadratic potential (exact answer,
+   fourth order); a uniform flow across a periodic axis's seam; malformed grids and the refusals. */
 #include "../include/mk_vpflow.h"
 #include "t.h"
 #include <stdlib.h>
@@ -172,16 +172,17 @@ int main(void)
     }
     for (int c = 0; c < 3; c++) free(a[c]);
     free(X), free(m.V), free(m.T);
-    { /* the verification work's findings on 1.2.2 (Result 87; scratch/the verification work/mk-new/findings/demo.c) */
+    { /* malformed grids: an axis whose node index would pass INT_MAX, a negative spacing, an empty axis behind an
+         out-of-range one */
         mk_vp P2 = {{INT_MAX - 3, 1, 1}, {0, 0, 0}, {1, 1, 1}, {0, 0, 0}, {NULL, NULL, NULL}};
         double x2[3] = {(double)(INT_MAX - 3) + 2, 0.5, 0.5}, A2[3], J2[3][3];
         mk_vp_eval(&P2, x2, A2, J2);
-        CHECK(mk_vp_ok(&P2) == -1 && isnan(A2[0]) && isnan(mk_vp_advect(&P2, x2, 1, 1.0, 1)), "V-A: INT_MAX - 3 nodes on an axis are refused (the node index would pass INT_MAX): NaN");
+        CHECK(mk_vp_ok(&P2) == -1 && isnan(A2[0]) && isnan(mk_vp_advect(&P2, x2, 1, 1.0, 1)), "INT_MAX - 3 nodes on an axis are refused (the node index would pass INT_MAX): NaN");
         double a8[8] = {1, 2, 3, 4, 5, 6, 7, 8};
         mk_vp P3 = {{2, 2, 2}, {0, 0, 0}, {-1, 1, 1}, {0, 0, 0}, {a8, a8, a8}}, P4 = {{2, 0, 2}, {0, 0, 0}, {1, 1, 1}, {0, 0, 0}, {a8, a8, a8}};
         double x3[3] = {-0.5, 0.5, 0.5}, x4[3] = {100, 0.5, 0.5}, A3[3], J3[3][3], u3[3], A4[3], J4[3][3];
         mk_vp_eval(&P3, x3, A3, J3), mk_vp_vel(&P3, x3, u3), mk_vp_eval(&P4, x4, A4, J4);
-        CHECK(isnan(A3[0]) && isnan(u3[0]) && isnan(mk_vp_div(&P3, x3, 1e-3)) && isnan(A4[0]), "V-B: a grid mk_vp_ok refuses (h < 0; an empty axis behind an out-of-range one) gives NaN from eval, vel and div, not numbers");
+        CHECK(isnan(A3[0]) && isnan(u3[0]) && isnan(mk_vp_div(&P3, x3, 1e-3)) && isnan(A4[0]), "a grid mk_vp_ok refuses (h < 0; an empty axis behind an out-of-range one) gives NaN from eval, vel and div, not numbers");
     }
     return wrong;
 }

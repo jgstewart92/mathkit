@@ -1,6 +1,6 @@
-/* mk_sdf on known meshes: a sphere and a torus against their analytic distance (near the surface and far from it), the sign at
-   every node of three nested shells, a random closed mesh against brute force, an open mesh (the winding number takes the odd
-   rows), two overlapping spheres with and without MK_SDF_FILL, the refusals. */
+/* mk_sdf on known meshes: a sphere and a torus against their analytic distance (near the surface and far from it), the
+   sign at every node of three nested shells, a random closed mesh against brute force, an open mesh (the winding number
+   takes the odd rows), two overlapping spheres with and without MK_SDF_FILL, the refusals. */
 #include "../include/mk_sdf.h"
 #include "t.h"
 #include <stdlib.h>
@@ -40,7 +40,7 @@ static void icosphere(msh *m, int sub)
         const int nk = 8 * m->nt + 1;
         int *key = malloc(sizeof(int) * 2 * (size_t)nk), *val = malloc(sizeof(int) * (size_t)nk);
         for (int i = 0; i < 2 * nk; i++) key[i] = -1;
-        int *T2 = malloc(sizeof(int) * 12 * (size_t)(unsigned)m->nt); /* unsigned: with 1.3.0 gcc -O3 warned of (size_t) of a negative nt */
+        int *T2 = malloc(sizeof(int) * 12 * (size_t)(unsigned)m->nt); /* unsigned: gcc -O3 warns on a negative nt */
         for (int t = 0; t < m->nt; t++) {
             const int a = m->T[3 * t], b = m->T[3 * t + 1], c = m->T[3 * t + 2], ab = mid(m, a, b, key, val, nk), bc = mid(m, b, c, key, val, nk), ca = mid(m, c, a, key, val, nk);
             const int q[12] = {a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca};
@@ -114,8 +114,9 @@ int main(void)
 {
     msh u;
     icosphere(&u, 5);
-    { /* the unit sphere (20480 faces) and a torus R 0.6 r 0.25 (65536 faces): the analytic distance, which the faces miss by
-         their sag; Batty's sweeps within 0.1 h of it beyond the band, MK_SDF_EXACT within the sag everywhere */
+    { /* the unit sphere (20480 faces) and a torus R 0.6 r 0.25 (65536 faces): the analytic distance, which the faces
+         miss by their sag; the fast sweeps (Batty, SDFGen, 2007) within 0.1 h of it beyond the band, MK_SDF_EXACT
+         within the sag everywhere */
         msh m;
         torus(&m, 0.6, 0.25, 256, 128);
         const double s1 = sag(&u, sd_unit), s2 = sag(&m, sd_tor);
@@ -130,8 +131,8 @@ int main(void)
               "torus R 0.6 r 0.25, h 0.015 (sag %.2e): largest error near the surface %.2e, beyond %.2e; exact %.2e and %.2e", s2, c[0], c[1], d[0], d[1]);
         mk_sdf_free(&g), mk_sdf_free(&gx), mk_sdf_free(&t), mk_sdf_free(&tx), free(m.V), free(m.T);
     }
-    { /* three nested shells: a ball of radius 0.25 in the hole of a shell 0.5 .. 1 (its inner face wound inward). The sign at
-         every node off the faces' sag; the winding number agrees with it at 1 node in 31 */
+    { /* three nested shells: a ball of radius 0.25 in the hole of a shell 0.5 .. 1 (its inner face wound inward). The
+         sign at every node off the faces' sag against the analytic solid, and the winding number at 1 node in 31 */
         msh m = {0};
         const double c0[3] = {0, 0, 0};
         icosphere(&u, 4);
@@ -154,8 +155,8 @@ int main(void)
               bad, tot, wbad, tot / 31);
         mk_sdf_free(&g), free(m.V), free(m.T);
     }
-    { /* a random closed mesh (a sphere of 1280 faces, each vertex pushed in or out by up to 30 %) against brute force: the
-         distance and the winding number's sign at every node */
+    { /* a random closed mesh (a sphere of 1280 faces, each vertex pushed in or out by up to 30 %) against brute force:
+         the distance and the winding number's sign at every node */
         msh m = {0};
         const double c0[3] = {0, 0, 0};
         icosphere(&u, 3);
@@ -188,15 +189,15 @@ int main(void)
               tot, e, tot - exact, ex, sb, g.near);
         mk_sdf_free(&g), mk_sdf_free(&gx), free(m.V), free(m.T);
     }
-    { /* an open mesh: a sphere with one face removed. Rows through the hole cross it an odd number of times; their sign comes
-         from the winding number, so the inside still reads inside */
+    { /* an open mesh: a sphere with one face removed. Rows through the hole cross it an odd number of times; their sign
+         comes from the winding number, so the inside still reads inside */
         msh m = {0};
         const double c0[3] = {0, 0, 0};
         icosphere(&u, 3);
         add_sphere(&m, &u, 1, c0, 0);
-        int far = 0;
+        int far = 0; /* the face that faces +x most, removed */
         for (int t = 1; t < m.nt; t++) if (m.V[3 * m.T[3 * t]] + m.V[3 * m.T[3 * t + 1]] + m.V[3 * m.T[3 * t + 2]] > m.V[3 * m.T[3 * far]] + m.V[3 * m.T[3 * far + 1]] + m.V[3 * m.T[3 * far + 2]]) far = t;
-        memmove(m.T + 3 * far, m.T + 3 * far + 3, sizeof(int) * 3 * (size_t)(m.nt - far - 1)), m.nt--; /* the face that faces +x most */
+        memmove(m.T + 3 * far, m.T + 3 * far + 3, sizeof(int) * 3 * (size_t)(m.nt - far - 1)), m.nt--;
         mk_sdf g;
         mk_sdf_mesh(m.V, m.nv, m.T, m.nt, 0.04, 0.2, 0, &g);
         long bad = 0, tot = 0;
@@ -212,9 +213,9 @@ int main(void)
         CHECK(g.odd_rows > 0 && bad == 0, "a sphere with one face missing: %ld rows odd on three rays, signed by the winding number (%ld more even on a second ray); the sign wrong at %ld of %ld nodes", g.odd_rows, g.reray, bad, tot);
         mk_sdf_free(&g), free(m.V), free(m.T);
     }
-    { /* a region covered twice: a sphere of radius 0.4 inside one of radius 1, both wound outward (winding 2 inside the small
-         one). Parity counts four crossings there and calls it outside; MK_SDF_FILL makes the enclosed pocket inside, and leaves
-         the outside alone */
+    { /* a region covered twice: a sphere of radius 0.4 inside one of radius 1, both wound outward (winding 2 inside the
+         small one). Parity counts four crossings there and calls it outside; MK_SDF_FILL makes the enclosed pocket
+         inside, and leaves the outside alone */
         msh m = {0};
         const double c0[3] = {0, 0, 0};
         icosphere(&u, 3);
@@ -235,9 +236,9 @@ int main(void)
               at(&g0, ic, jc, kc), at(&g1, ic, jc, kc), g1.filled, badout, nout);
         mk_sdf_free(&g0), mk_sdf_free(&g1), free(m.V), free(m.T);
     }
-    { /* a square prism turned 45 degrees, |x| + |y| < r, |z| < 1, with r set so a diagonal of nodes lies 2.1e-6 inside its
-         slanted faces: nearer than the rays' offset (1.2e-5), so their rays meet the face before the node. The winding number
-         signs those nodes; parity alone would call them outside */
+    { /* a square prism turned 45 degrees, |x| + |y| < r, |z| < 1, with r set so a diagonal of nodes lies 2.1e-6 inside
+         its slanted faces: nearer than the rays' offset (1.2e-5), so their rays meet the face before the node. The
+         winding number signs those nodes; parity alone would call them outside */
         const double r = 0.5 + 1e-6, h = 0.1;
         const double V[24] = {r, 0, -1, 0, r, -1, -r, 0, -1, 0, -r, -1, r, 0, 1, 0, r, 1, -r, 0, 1, 0, -r, 1};
         const int T[36] = {0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7, 0, 3, 2, 0, 2, 1, 4, 5, 6, 4, 6, 7};
@@ -260,7 +261,8 @@ int main(void)
         mk_sdf g;
         const int tri[3] = {0, 1, 2}, bad[3] = {0, 1, 3};
         const double v3[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0}, vn[9] = {0, 0, 0, NAN, 0, 0, 0, 1, 0};
-        const int r1 = mk_sdf_mesh(v3, 3, tri, 1, 1e-10, 0, 0, &g), r2 = mk_sdf_mesh(v3, 3, tri, 1, 5e-7, 0.5, 0, &g); /* 1e10 nodes along x; 3e19 nodes */
+        /* r1: 1e10 nodes along x; r2: 3e19 nodes in all */
+        const int r1 = mk_sdf_mesh(v3, 3, tri, 1, 1e-10, 0, 0, &g), r2 = mk_sdf_mesh(v3, 3, tri, 1, 5e-7, 0.5, 0, &g);
         const int r3 = mk_sdf_mesh(v3, 3, bad, 1, 0.1, 0, 0, &g), r4 = mk_sdf_mesh(vn, 3, tri, 1, 0.1, 0, 0, &g), r5 = mk_sdf_mesh(v3, 3, tri, 1, 0, 0, 0, &g);
         const int r6 = mk_sdf_mesh(v3, 3, tri, 0, 0.1, 0, 0, &g), r7 = mk_sdf_mesh(v3, 3, tri, 1, 0.1, -1, 0, &g), r8 = mk_sdf_mesh(v3, 3, tri, 1, 0.1, 0, 0, &g);
         CHECK(r1 == -1 && r2 == -1 && r3 == -1 && r4 == -1 && r5 == -1 && r6 == -1 && r7 == -1 && r8 == 0 && g.n[0] == 11,
@@ -294,11 +296,10 @@ int main(void)
         CHECK(ra == 0 && rb == 0 && on && s[0] > 0 && diff == 0, "MK_SDF_LATTICE: node 0 on the lattice for margins 0.13 and 0.31; %ld of %ld shared nodes differ (exact mode)", diff, shared);
         mk_sdf_free(&a), mk_sdf_free(&b);
     }
-#ifndef T_OLD
-    { /* 1.5.2, mk_sdf_mesh_box: a box across the surface and past the whole grid's side, and a box just off the surface (every node
-         outside, its nearest faces a cell or two beyond its side), on the lattice, against the whole grid at their shared nodes: with
-         MK_SDF_EXACT every one bit for bit; plain, every sign and every value within the band. A box away from the mesh: every node
-         within the sag of the analytic distance (MK_SDF_EXACT). The refusals. */
+    { /* mk_sdf_mesh_box: a box across the surface and past the whole grid's side, and a box just off the surface (every
+         node outside, its nearest faces a cell or two beyond its side), on the lattice, against the whole grid at their
+         shared nodes: with MK_SDF_EXACT every one bit for bit; plain, every sign and every value within the band. A box
+         away from the mesh: every node within the sag of the analytic distance (MK_SDF_EXACT). The refusals. */
         const double hb = 0.05, box[2][6] = {{0.32, -0.41, -0.26, 1.33, 0.37, 0.52}, {1.08, -0.21, -0.19, 1.4, 0.22, 0.23}}, far[6] = {2, 2, 2, 2.5, 2.6, 2.7};
         mk_sdf w, wx, b[2], bx[2], fx;
         const int r = mk_sdf_mesh(u.V, u.nv, u.T, u.nt, hb, 0.2, MK_SDF_LATTICE, &w) | mk_sdf_mesh(u.V, u.nv, u.T, u.nt, hb, 0.2, MK_SDF_LATTICE | MK_SDF_EXACT, &wx) |
@@ -345,34 +346,32 @@ int main(void)
 #undef REF
         CHECK(nr == k, "mk_sdf_mesh_box refuses %d of %d: MK_SDF_FILL, hi below lo, a NaN corner, no box, h 0", nr, k);
     }
-#endif
     free(u.V), free(u.T);
-    { /* the verification work's findings on 1.2.2 (Result 87; scratch/the verification work/mk-new/findings/demo.c and NOTES.md) */
+    { /* refusals that leave the grid empty, and the sampling of an empty grid; an open triangle whose re-cast rays
+         cross nothing */
         double W[9] = {1e10, 1e10, 1e10, 1e10 + 1e-6, 1e10, 1e10, 1e10, 1e10 + 1e-6, 1e10};
         const int T1[3] = {0, 1, 2};
         mk_sdf g;
         memset(&g, 0x5a, sizeof g);
         const int r = mk_sdf_mesh(W, 3, T1, 1, 0x1p-1000, 0, MK_SDF_LATTICE, &g);
-        CHECK(r == -1 && g.n[0] == 0 && g.d == NULL, "S-A: a lattice grid past the double range (h 2^-1000 at 1e10) is refused, the grid left empty (%d)", r);
+        CHECK(r == -1 && g.n[0] == 0 && g.d == NULL, "a lattice grid past the double range (h 2^-1000 at 1e10) is refused, the grid left empty (%d)", r);
         double V2[9] = {0, 0, 0, 1, 0, 0, 0, 1, 1};
         memset(&g, 0x5a, sizeof g);
         const int r2 = mk_sdf_mesh(V2, 3, T1, 1, 1e-9, 0, 0, &g);
-        CHECK(r2 == -1 && g.n[0] == 0 && g.n[1] == 0 && g.n[2] == 0 && g.h == 0 && g.d == NULL, "S-D: a grid too large for memory is refused with the grid left empty, all zero (%d; n %d %d %d)", r2, g.n[0], g.n[1], g.n[2]);
-#ifndef T_OLD /* 1.2.2 reads d = NULL */
+        CHECK(r2 == -1 && g.n[0] == 0 && g.n[1] == 0 && g.n[2] == 0 && g.h == 0 && g.d == NULL, "a grid too large for memory is refused with the grid left empty, all zero (%d; n %d %d %d)", r2, g.n[0], g.n[1], g.n[2]);
         const int Tb[3] = {0, 1, 3};
         const int r3 = mk_sdf_mesh(V2, 3, Tb, 1, 0.1, 0, 0, &g);
-        CHECK(r3 == -1 && isnan(mk_sdf_sample(&g, (double[3]){0, 0, 0})), "S-B: sampling the empty grid a refusal leaves reads NaN");
-#endif
+        CHECK(r3 == -1 && isnan(mk_sdf_sample(&g, (double[3]){0, 0, 0})), "sampling the empty grid a refusal leaves reads NaN");
         double V3[9] = {0.5, 0, 0, 1, 0.5, 1, 0.25, 1, 1};
         const int r4 = mk_sdf_mesh(V3, 3, T1, 1, 0.25 / 3, 0.5, 0, &g);
-        CHECK(r4 == 0 && g.reray + g.odd_rows > 0, "S-C: one open triangle (a re-cast ray that crosses nothing): 0, %ld rows re-cast, %ld odd (1.2.2 gave qsort a NULL; seen only by UBSan)", r4 ? -1L : (long)g.reray, r4 ? -1L : (long)g.odd_rows);
+        CHECK(r4 == 0 && g.reray + g.odd_rows > 0, "one open triangle (a re-cast ray that crosses nothing): 0, %ld rows re-cast, %ld odd", r4 ? -1L : (long)g.reray, r4 ? -1L : (long)g.odd_rows);
         if (!r4) mk_sdf_free(&g);
     }
-    { /* 1.6.0, the review's N1: a NaN coordinate reads NaN; 1.5.6 clamped it to node 0 */
+    { /* a NaN coordinate samples NaN, not the clamped value at node 0; +inf clamps to the grid's edge */
         float d8[8] = {-1, 2, 3, 4, 5, 6, 7, 8};
         mk_sdf g = {.n = {2, 2, 2}, .h = 1, .d = d8};
         const double a = mk_sdf_sample(&g, (double[3]){NAN, 0, 0}), b = mk_sdf_sample(&g, (double[3]){0, 0, NAN}), c = mk_sdf_sample(&g, (double[3]){INFINITY, 0, 0});
-        CHECK(isnan(a) && isnan(b) && c == 2, "N1 (review): sampling at a NaN coordinate gives NaN (%g, %g); +inf still clamps to the box (%g)", a, b, c);
+        CHECK(isnan(a) && isnan(b) && c == 2, "sampling at a NaN coordinate gives NaN (%g, %g); +inf still clamps to the box (%g)", a, b, c);
     }
     return wrong;
 }

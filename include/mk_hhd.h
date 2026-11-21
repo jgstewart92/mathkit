@@ -1,51 +1,55 @@
-/* mathkit: the Helmholtz-Hodge decomposition of a 2-D motion field on an image grid (the maintainer, 2026-11-19, 1.5.6). Optic flow
-   or motion vectors (u, v), one per pixel, split into three parts that add up to the field and are orthogonal in the plain
-   pixel sum:
+/* mathkit: the Helmholtz-Hodge decomposition of a 2-D motion field on an image grid. Optic flow or motion vectors
+   (u, v), one per pixel, split into three parts that add up to the field and are orthogonal in the plain pixel sum:
      gradient part    grad(phi)                        expansion and contraction; curl-free
      rotational part  rot(psi) = (dpsi/dy, -dpsi/dx)   swirl; divergence-free
-     harmonic rest    h                                both divergence- and curl-free: a uniform shift, a pure strain, and
-                                                       what comes in through the frame's edge
-   Boundary choice: phi = psi = 0 on the frame, Dirichlet on both (the Hodge-Morrey split; "normal-parallel" in Bhatia et al.,
-   The Helmholtz-Hodge decomposition: a survey, IEEE TVCG 2013). The gradient part meets the frame at right angles, the
-   rotational part runs along it, the harmonic part takes the rest with no condition. On a rectangle it is the standard
-   choice that gives three orthogonal parts and a uniform shift in the harmonic one: with phi Neumann (dphi/dn the field's normal flow) the
-   harmonic part may carry no flux through the frame, and on a simply connected frame that leaves no harmonic field at all,
-   so a shift would land in the gradient part. The price: near the frame a part of any expansion or swirl, the flow
-   crossing the frame, is harmonic (a swirl or an expansion centred on a 16:9 frame keeps 62 % of its energy in its own
-   part, 38 % harmonic; on a square 84 %; t_hhd measures it). The rates below are exact all the same: div(grad phi) = div v
-   and curl(rot psi) = curl v at every inner corner.
-   Discrete form: pixel (i, j) centred at (i, j); the potentials at the pixel corners (i - 1/2, j - 1/2), 0 on the frame's
-   corners; a pixel's gradient is the 2 x 2 box difference of its four corners. So div(rot psi) and curl(grad phi) vanish at
-   every inner corner to rounding, the parts are orthogonal to rounding, and phi and psi are least-squares fits: A phi = -div v
-   and A psi = curl v at the inner corners (div and curl the box differences there, A the box Laplacian). A's sine modes have
-   the values 2 (1 - cos(pi k / nx) cos(pi l / ny)): the solve is a sine transform along y (mk_fftm, length 2 ny) and the
-   tridiagonal (-cos(pi l / ny), 2, -cos(pi l / ny)) along x for each mode (mk_tridiag). The box differences are exact on
-   quadratic fields, which is what a pinhole camera's flow over a plane is (Longuet-Higgins and Prazdny 1980). A pattern that
-   alternates pixel by pixel has no box divergence or curl, so such noise stays in the harmonic part.
-   mk_hhd_init(H, nx, ny): nx, ny >= 2 (and their product under 2^31); 0, or -1 (no memory; H is then empty). mk_hhd_free.
-   mk_hhd_split(H, u, v): u, v nx * ny, index j nx + i (x fastest), any units (pixels per frame, per second); fills H's parts
-   gx, gy, rx, ry, hx, hy (the same layout) and phi, psi ((nx + 1) (ny + 1), index j (nx + 1) + i for corner (i - 1/2, j - 1/2)).
-   0, or -1 (H not initialized, a value not finite: every part NaN). Threads (with -fopenmp): the transforms and solves, by
-   columns and rows, the same bits at any thread count.
+     harmonic rest    h                                both divergence- and curl-free: a uniform shift, a pure strain,
+                                                       and what comes in through the frame's edge
+   Boundary choice: phi = psi = 0 on the frame, Dirichlet on both (the Hodge-Morrey split; "normal-parallel" in Bhatia
+   et al., The Helmholtz-Hodge decomposition: a survey, IEEE TVCG 2013). The gradient part meets the frame at right
+   angles, the rotational part runs along it, the harmonic part takes the rest with no condition. On a rectangle this is
+   the standard choice that gives three orthogonal parts and puts a uniform shift in the harmonic one: with phi Neumann
+   (dphi/dn the field's normal flow) the harmonic part could carry no flux through the frame, which on a simply
+   connected frame leaves no harmonic field at all, so a shift would land in the gradient part. The cost: near the
+   frame, part of any expansion or swirl (the flow crossing the frame) is harmonic. A swirl or an expansion centred on a
+   16:9 frame keeps 62 % of its energy in its own part, 38 % harmonic; on a square, 84 % (test/t_hhd.c measures it). The
+   rates below are exact all the same: div(grad phi) = div v and curl(rot psi) = curl v at every inner corner.
+   Discrete form: pixel (i, j) centred at (i, j); the potentials at the pixel corners (i - 1/2, j - 1/2), 0 on the
+   frame's corners; a pixel's gradient is the 2 x 2 box difference of its four corners. So div(rot psi) and curl(grad
+   phi) vanish at every inner corner to rounding, the parts are orthogonal to rounding, and phi and psi are
+   least-squares fits: A phi = -div v and A psi = curl v at the inner corners (div and curl the box differences there, A
+   the box Laplacian). A's sine modes have the values 2 (1 - cos(pi k / nx) cos(pi l / ny)): the solve is a sine
+   transform along y (mk_fftm, length 2 ny) and the tridiagonal (-cos(pi l / ny), 2, -cos(pi l / ny)) along x for each
+   mode (mk_tridiag). The box differences are exact on quadratic fields, which is what a pinhole camera's flow over a
+   plane is (Longuet-Higgins and Prazdny 1980). A pattern that alternates pixel by pixel has no box divergence or curl,
+   so such noise stays in the harmonic part.
+   mk_hhd_init(H, nx, ny): nx, ny >= 2 (and their product under 2^31); 0, or -1 (no memory; H is then empty).
+   mk_hhd_free.
+   mk_hhd_split(H, u, v): u, v nx * ny, index j nx + i (x fastest), any units (pixels per frame, per second); fills H's
+   parts gx, gy, rx, ry, hx, hy (the same layout) and phi, psi ((nx + 1) (ny + 1), index j (nx + 1) + i for corner
+   (i - 1/2, j - 1/2)). 0, or -1 (H not initialized, a value not finite: every part NaN). Threads (with -fopenmp): the
+   transforms and solves, by columns and rows, the same bits at any thread count.
    mk_hhd_readout(H, cx, cy, R), after a split; (cx, cy) the principal point in pixels (NaN: the frame's centre):
-     expand   half the mean divergence of the gradient part over the inner corners: a(x - x0) gives a; an approach at speed W
-              to a wall at Z gives W / Z, 1 / the time to contact. Per the field's time unit.
-     rot      half the mean curl (dv/dx - du/dy) of the rotational part: positive turns +x toward +y (clockwise on screen when
-              y counts rows down). A camera's roll at rate C about its forward axis (Longuet-Higgins and Prazdny's C; x right,
-              y down, z forward) gives -C. A translation over unequal depths has a shear of its own, which counts here too.
+     expand   half the mean divergence of the gradient part over the inner corners: a(x - x0) gives a; an approach at
+              speed W to a wall at Z gives W / Z, 1 / the time to contact. Per the field's time unit.
+     rot      half the mean curl (dv/dx - du/dy) of the rotational part: positive turns +x toward +y (clockwise on
+              screen when y counts rows down). A camera's roll at rate C about its forward axis (Longuet-Higgins and
+              Prazdny's C; x right, y down, z forward) gives -C. A translation over unequal depths has a shear of its
+              own, which counts here too.
      trans    the harmonic part's mean, which is the field's mean: the box gradients of rim-zero potentials sum to 0.
-     foe      the focus of expansion: the point x0 with the least squares of (x - x0) x v' over the pixels, v' the field less a
-              rigid swirl at rate rot about (cx, cy). The flow of a translating camera points away from x0 whatever the
-              depth, so x0 is exact for a translation and a roll over a wall facing the camera; another scene's shear in rot
-              moves it a little (t_hhd: 0.24 px on a tilted plane, 0.12 px in a box room). A pan or tilt adds a near-uniform
-              shift that one view cannot tell from a moved heading, and the read point moves with it. NaN when the field
-              has no point to fit (parallel flow, or nothing left once the swirl is out).
-     e[3]     the gradient, rotational and harmonic parts' shares of the field's energy (sum |part|^2 / sum |v|^2; they add to 1).
+     foe      the focus of expansion: the point x0 with the least squares of (x - x0) x v' over the pixels, v' the field
+              less a rigid swirl at rate rot about (cx, cy). The flow of a translating camera points away from x0
+              whatever the depth, so x0 is exact for a translation and a roll over a wall facing the camera; another
+              scene's shear in rot moves it a little (the tests: 0.24 px on a tilted plane, 0.12 px in a box room). A
+              pan or tilt adds a near-uniform shift that one view cannot tell from a moved heading, and the read point
+              moves with it. NaN when the field has no point to fit (parallel flow, or nothing left once the swirl is
+              out).
+     e[3]     the gradient, rotational and harmonic parts' shares of the field's energy (sum |part|^2 / sum |v|^2; they
+              add to 1).
    Header only, C23.
-   Experimental (1.6.0): not frozen with the numerical core; its results may still change between releases. Speed: the sine
-   transform's length 2 ny goes by its largest prime factor's direct sum (mk_fftm): 1920 x 1080 (factor 5) split in 0.18 s, x 1088 (17)
-   0.29 s, x 802 (401) 3.3 s, x 1031 (1031) 10.7 s (MEASURED 2026-11-19 on the development machine, one thread); 26 common heights from 144 to 4320
-   (letterboxed 804 and 816 among them) have factors up to 67. */
+   Experimental: its results may change between releases.
+   Speed: the sine transform of length 2 ny takes its largest prime factor by a direct sum (mk_fftm). On one thread of
+   an x86-64 desktop, 1920 x 1080 (factor 5) splits in 0.18 s, x 1088 (17) in 0.29 s, x 802 (401) in 3.3 s and x 1031
+   (1031) in 10.7 s; 26 common heights from 144 to 4320 (letterboxed 804 and 816 among them) have factors up to 67. */
 #ifndef MK_HHD_H
 #define MK_HHD_H
 #include "mk_fft.h"
@@ -57,7 +61,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { MK_HHD_LANES_ = 16, MK_HHD_COLS_ = 8 }; /* lanes: buffers fixed by count, not by thread; columns per transform block */
+/* lanes: buffers fixed by count, not by thread; columns per transform block */
+enum { MK_HHD_LANES_ = 16, MK_HHD_COLS_ = 8 };
 
 typedef struct {
     int nx, ny;
@@ -93,8 +98,8 @@ static inline int mk_hhd_init(mk_hhd *H, int nx, int ny)
     H->nx = nx, H->ny = ny;
     return 0;
 }
-/* the sine transform along y (k = 1 .. ny - 1) of columns a0 .. a1 - 1 of the inner corners, real and imaginary parts at once;
-   times sc */
+/* the sine transform along y (k = 1 .. ny - 1) of columns a0 .. a1 - 1 of the inner corners, real and imaginary parts
+   at once; times sc */
 static inline void mk_hhd_dst_(mk_hhd *H, int lane, int a0, int a1, double sc)
 {
     const int Nx = H->nx - 1, ny = H->ny, L = 2 * ny;
@@ -122,7 +127,7 @@ static inline int mk_hhd_tri_(mk_hhd *H, int lane, int l0, int l1)
     int bad = 0;
     for (int l = l0; l < l1; l++) {
 #if defined(MK_MUTATE) && MK_MUTATE == 241
-        const double c = cos(MK_FFT_PI * l / H->ny); /* 241: the coupling's sign turned */
+        const double c = cos(MK_FFT_PI * l / H->ny); /* planted fault: the coupling's sign turned */
 #else
         const double c = -cos(MK_FFT_PI * l / H->ny);
 #endif
@@ -140,14 +145,15 @@ static inline int mk_hhd_split(mk_hhd *H, const double *u, const double *v)
     const int nx = H->nx, ny = H->ny, Nx = nx - 1, Ny = ny - 1, nv1 = nx + 1;
     const size_t nc = (size_t)nx * ny;
     int fin = 1;
-    for (int b = 1; b < ny; b++) /* -div and curl at the inner corners: cells LL (a-1, b-1), LR (a, b-1), UL (a-1, b), UR (a, b) */
+    /* -div and curl at the inner corners: cells LL (a-1, b-1), LR (a, b-1), UL (a-1, b), UR (a, b) */
+    for (int b = 1; b < ny; b++)
         for (int a = 1; a < nx; a++) {
             const size_t ll = (size_t)(b - 1) * nx + (a - 1), lr = ll + 1, ul = ll + nx, ur = ul + 1, q = (size_t)(b - 1) * Nx + (a - 1);
             const double div = 0.5 * ((u[lr] - u[ll]) + (u[ur] - u[ul])) + 0.5 * ((v[ul] - v[ll]) + (v[ur] - v[lr]));
             const double curl = 0.5 * ((v[lr] - v[ll]) + (v[ur] - v[ul])) - 0.5 * ((u[ul] - u[ll]) + (u[ur] - u[lr]));
             H->zr_[q] = -div;
 #if defined(MK_MUTATE) && MK_MUTATE == 245
-            H->zi_[q] = -curl; /* 245: the curl's sign turned */
+            H->zi_[q] = -curl; /* planted fault: the curl's sign turned */
 #else
             H->zi_[q] = curl;
 #endif
@@ -165,7 +171,7 @@ static inline int mk_hhd_split(mk_hhd *H, const double *u, const double *v)
                 continue;
             }
 #if defined(MK_MUTATE) && MK_MUTATE == 242
-            const double sc = pass ? 1.0 / ny : 1; /* 242: the inverse's 2 / ny left at 1 / ny */
+            const double sc = pass ? 1.0 / ny : 1; /* planted fault: the inverse scaled by 1 / ny, not 2 / ny */
 #else
             const double sc = pass ? 2.0 / ny : 1; /* the sine transform twice is ny / 2 times the identity */
 #endif
@@ -187,7 +193,8 @@ static inline int mk_hhd_split(mk_hhd *H, const double *u, const double *v)
             }
         }
     fin = 1;
-    for (int j = 0; j < ny; j++) /* the parts: each pixel's box differences of its corners (i, j), (i+1, j), (i, j+1), (i+1, j+1) */
+    /* the parts: each pixel's box differences of its corners (i, j), (i+1, j), (i, j+1), (i+1, j+1) */
+    for (int j = 0; j < ny; j++)
         for (int i = 0; i < nx; i++) {
             const size_t c = (size_t)j * nx + i, o = (size_t)j * nv1 + i, p = o + nv1;
             const double *f = H->phi, *s = H->psi;
@@ -195,7 +202,7 @@ static inline int mk_hhd_split(mk_hhd *H, const double *u, const double *v)
             const double sx = 0.5 * ((s[o + 1] - s[o]) + (s[p + 1] - s[p])), sy = 0.5 * ((s[p] - s[o]) + (s[p + 1] - s[o + 1]));
             H->gx[c] = fx, H->gy[c] = fy;
 #if defined(MK_MUTATE) && MK_MUTATE == 240
-            H->rx[c] = sy, H->ry[c] = sx; /* 240: rot psi's second component unturned */
+            H->rx[c] = sy, H->ry[c] = sx; /* planted fault: rot psi's second component without its sign */
 #else
             H->rx[c] = sy, H->ry[c] = -sx;
 #endif
@@ -225,7 +232,7 @@ static inline void mk_hhd_readout(const mk_hhd *H, double cx, double cy, mk_hhd_
         }
     const double ni = (double)(nx - 1) * (ny - 1), nc = (double)nx * ny;
 #if defined(MK_MUTATE) && MK_MUTATE == 244
-    R->expand = sd / ni, R->rot = sc / (2 * ni); /* 244: the divergence's mean not halved */
+    R->expand = sd / ni, R->rot = sc / (2 * ni); /* planted fault: the divergence's mean not halved */
 #else
     R->expand = sd / (2 * ni), R->rot = sc / (2 * ni);
 #endif
@@ -240,7 +247,7 @@ static inline void mk_hhd_readout(const mk_hhd *H, double cx, double cy, mk_hhd_
     /* the focus: min over x0 of sum ((x - x0) v'y - (y - y0) v'x)^2, a 2 x 2 normal system */
     double s11 = 0, s12 = 0, s22 = 0, t1 = 0, t2 = 0;
 #if defined(MK_MUTATE) && MK_MUTATE == 243
-    const double w = 0; /* 243: the swirl left in */
+    const double w = 0; /* planted fault: the swirl left in */
 #else
     const double w = R->rot;
 #endif
@@ -253,7 +260,8 @@ static inline void mk_hhd_readout(const mk_hhd *H, double cx, double cy, mk_hhd_
             s11 += vy * vy, s12 -= vx * vy, s22 += vx * vx, t1 += vy * m, t2 -= vx * m;
         }
     const double det = s11 * s22 - s12 * s12;
-    if (det > 1e-12 * s11 * s22 && s11 + s22 > 1e-24 * ev) /* a field left with no flow (a pure swirl) has no focus either */
+    /* a field left with no flow (a pure swirl) has no focus either */
+    if (det > 1e-12 * s11 * s22 && s11 + s22 > 1e-24 * ev)
         R->foe[0] = cx + (t1 * s22 - t2 * s12) / det, R->foe[1] = cy + (s11 * t2 - s12 * t1) / det;
 }
 #endif

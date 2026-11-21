@@ -1,8 +1,8 @@
 /* mathkit: time steppers for y' = f(t, y). Classic RK4 (fixed step); Dormand-Prince 5(4) with adaptive steps, mixed
    absolute and relative tolerance and first-same-as-last reuse; velocity Verlet for x'' = a(x), symplectic, so energy
-   errors stay bounded over long runs; for stiff problems, Shampine's ode23s (Rosenbrock, adaptive, L-stable) and BDF1/BDF2
-   steps solved by Newton. The explicit steppers take caller-owned work arrays sized by the macros; the stiff ones allocate
-   per call. Header only, C23; the stiff part uses mk_linalg.h. */
+   errors stay bounded over long runs; for stiff problems, Shampine's ode23s (Rosenbrock, adaptive, L-stable) and
+   BDF1/BDF2 steps solved by Newton. The explicit steppers take caller-owned work arrays sized by the macros; the stiff
+   ones allocate per call. Header only, C23; the stiff part uses mk_linalg.h. */
 #ifndef MK_ODE_H
 #define MK_ODE_H
 #include "mk_linalg.h"
@@ -25,7 +25,7 @@ static inline void mk_rk4_step(mk_odefn f, void *ctx, int n, double t, double *y
     for (int i = 0; i < n; i++) z[i] = y[i] + h * k3[i];
     f(t + h, z, k4, ctx);
 #if defined(MK_MUTATE) && MK_MUTATE == 51
-    for (int i = 0; i < n; i++) y[i] += h / 4 * (k1[i] + k2[i] + k3[i] + k4[i]);
+    for (int i = 0; i < n; i++) y[i] += h / 4 * (k1[i] + k2[i] + k3[i] + k4[i]); /* planted fault: equal weights */
 #else
     for (int i = 0; i < n; i++) y[i] += h / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
 #endif
@@ -33,18 +33,19 @@ static inline void mk_rk4_step(mk_odefn f, void *ctx, int n, double t, double *y
 
 typedef struct {
     double rtol, atol; /* error per component <= atol + rtol * |y| */
-    double hmax;       /* 0: no limit; met to within half an ulp of t (a step is one t can take: hmax 9 at t 1e17 steps 16) */
-    long accepted, rejected, evals; /* added to by every call (a run in pieces counts as one): zero them to count one call */
+    /* hmax 0: no limit; met to within half an ulp of t (a step is one t can take: hmax 9 at t 1e17 steps 16) */
+    double hmax;
+    /* the counts are added to by every call (a run in pieces counts as one): zero them to count one call */
+    long accepted, rejected, evals;
     long maxsteps;     /* accepted plus rejected steps per call before giving up (-1); 0 = 10 million */
 } mk_dopri_ctl;
 
 #define MK_DOPRI_WORK(n) (9 * (n))
 /* Integrate y from t0 to t1 (either direction). *h: the first step to try (0 picks one) and, after, the last one taken,
-   to carry on from. work holds MK_DOPRI_WORK(n) doubles. 0, or -1 if the step fell below 1e-14 of the span or below t's
-   resolution (1.6.1: each step is the one t can take, (t + s) - t, so y moves as far as t; 1.6.0 moved y by s where t's ulp
-   rounded it away; 1.6.2: a step after a rejection is smaller than the one rejected, where 1.6.1's rounding gave the same few-ulp
-   step back until maxsteps), f gave a NaN the steps could not shrink past (1.6.1; 1.6.2 in any component, 1.6.1 only in the last:
-   1.6.0 took the NaN step and returned 0), t0 or t1 is not finite, or n < 0. */
+   to carry on from. work holds MK_DOPRI_WORK(n) doubles. Each step is one t can take, (t + s) - t, so y moves as far as
+   t does, and a step after a rejection is smaller than the one rejected. 0, or -1 if the step fell below 1e-14 of the
+   span or below t's resolution, f gave a NaN (in any component) the steps could not shrink past, maxsteps ran out, t0
+   or t1 is not finite, or n < 0. */
 static inline int mk_dopri(mk_odefn f, void *ctx, int n, double t0, double *y, double t1, double *h, double *work, mk_dopri_ctl *c)
 {
     static const double c2 = 1. / 5, c3 = 3. / 10, c4 = 4. / 5, c5 = 8. / 9;
@@ -53,13 +54,14 @@ static inline int mk_dopri(mk_odefn f, void *ctx, int n, double t0, double *y, d
                         a61 = 9017. / 3168, a62 = -355. / 33, a63 = 46732. / 5247, a64 = 49. / 176, a65 = -5103. / 18656,
                         b1 = 35. / 384, b3 = 500. / 1113, b4 = 125. / 192, b5 = -2187. / 6784, b6 = 11. / 84;
 #if defined(MK_MUTATE) && MK_MUTATE == 52
-    static const double e1 = 0, e3 = 0, e4 = 0, e5 = 0, e6 = 0, e7 = 0;
+    static const double e1 = 0, e3 = 0, e4 = 0, e5 = 0, e6 = 0, e7 = 0; /* planted fault: no error estimate */
 #else
     static const double e1 = 71. / 57600, e3 = -71. / 16695, e4 = 71. / 1920, e5 = -17253. / 339200, e6 = 22. / 525, e7 = -1. / 40;
 #endif
     double *k1 = work, *k2 = k1 + n, *k3 = k2 + n, *k4 = k3 + n, *k5 = k4 + n, *k6 = k5 + n, *k7 = k6 + n, *z = k7 + n, *yn = z + n;
     double span = t1 - t0, dir = span >= 0 ? 1 : -1, t = t0;
-    double hh = *h != 0 && isfinite(*h) ? fabs(*h) : fmax(fabs(span) * 1e-3, 16 * (nextafter(fabs(t0), INFINITY) - fabs(t0))); /* fmin drops a NaN *h; 1.6.1: a first guess t can take */
+    /* a NaN or infinite *h picks one too, of at least 16 ulps of t0 */
+    double hh = *h != 0 && isfinite(*h) ? fabs(*h) : fmax(fabs(span) * 1e-3, 16 * (nextafter(fabs(t0), INFINITY) - fabs(t0)));
     if (c->hmax > 0 && hh > c->hmax) hh = c->hmax;
     if (!isfinite(span)) return -1; /* a NaN or infinite t0 or t1 */
     if (span == 0) return 0;
@@ -68,11 +70,12 @@ static inline int mk_dopri(mk_odefn f, void *ctx, int n, double t0, double *y, d
     long cap = c->maxsteps > 0 ? c->maxsteps : 10000000, used = 0;
     double hrej = INFINITY; /* the step just rejected */
     while (dir * (t1 - t) > 0) {
-        if (used >= cap) { /* compare, then count: used never passes cap (the verification work O-E, O-E') */ *h = dir * hh; return -1; }
+        if (used >= cap) { /* compare, then count: used never passes cap */ *h = dir * hh; return -1; }
         used++;
         double rem = dir * (t1 - t), hs = rem - hh < 1e-12 * fabs(span) ? rem : hh, err; /* no sliver left before t1 */
-        if (hs != rem) hs = dir * ((t + dir * hs) - t); /* 1.6.1: the step t can take (0 below t's resolution) */
-        if (hs >= hrej) hs = dir * (nextafter(t + dir * hrej, t) - t); /* 1.6.2: smaller than the step rejected (the snap rounded back up to it) */
+        if (hs != rem) hs = dir * ((t + dir * hs) - t); /* the step t can take (0 below t's resolution) */
+        /* smaller than the step rejected, which the snap can round up to */
+        if (hs >= hrej) hs = dir * (nextafter(t + dir * hrej, t) - t);
         if (hs < 1e-14 * fabs(span)) { *h = dir * hh; return -1; }
         double s = dir * hs;
         for (int i = 0; i < n; i++) z[i] = y[i] + s * a21 * k1[i];
@@ -93,7 +96,7 @@ static inline int mk_dopri(mk_odefn f, void *ctx, int n, double t0, double *y, d
             double ei = s * (e1 * k1[i] + e3 * k3[i] + e4 * k4[i] + e5 * k5[i] + e6 * k6[i] + e7 * k7[i]);
             double sc = c->atol + c->rtol * fmax(fabs(y[i]), fabs(yn[i]));
             const double q = fabs(ei) / sc;
-            if (q > err || q != q) err = q; /* 1.6.2: a NaN stays a NaN in any component (1.6.1 kept it only in the last; fmax drops it) */
+            if (q > err || q != q) err = q; /* a NaN in any component stays NaN (fmax would drop it) */
         }
         if (!isfinite(err)) err = 1e10;
         hh = hs * fmin(5, fmax(0.2, 0.9 * pow(err + 1e-300, -0.2)));
@@ -108,13 +111,14 @@ static inline int mk_dopri(mk_odefn f, void *ctx, int n, double t0, double *y, d
     return 0;
 }
 
-/* velocity Verlet for x'' = acc(x): x and v of n, a the acceleration at x on entry and on return (call acc once before the
-   first step). work holds n doubles. Second order and symplectic. */
+/* velocity Verlet for x'' = acc(x): x and v of n, a the acceleration at x on entry and on return (call acc once before
+   the first step). work holds n doubles. Second order and symplectic. */
 typedef void (*mk_accfn)(const double *x, double *a, void *ctx);
 static inline void mk_verlet_step(mk_accfn acc, void *ctx, int n, double *x, double *v, double *a, double h, double *work)
 {
 #if defined(MK_MUTATE) && MK_MUTATE == 53
-    for (int i = 0; i < n; i++) x[i] += h * v[i], v[i] += h * a[i]; /* explicit Euler: energy grows */
+    /* planted fault: explicit Euler, whose energy grows */
+    for (int i = 0; i < n; i++) x[i] += h * v[i], v[i] += h * a[i];
     acc(x, a, ctx);
     (void)work;
 #else
@@ -124,7 +128,7 @@ static inline void mk_verlet_step(mk_accfn acc, void *ctx, int n, double *x, dou
 #endif
 }
 
-/* ---- stiff problems ----------------------------------------------------------------------------------------------- */
+/* ---- stiff problems ---------------------------------------------------------------------------------------------- */
 
 /* the Jacobian J[i * n + j] = d f_i / d y_j at (t, y) */
 typedef void (*mk_odejac)(double t, const double *y, double *J, void *ctx);
@@ -148,27 +152,30 @@ typedef struct {
     long maxsteps;     /* steps per call before giving up (-1); 0 = 10 million */
 } mk_stiff_ctl;
 
-/* Shampine's ode23s (Shampine and Reichelt 1997, the MATLAB ODE suite): a Rosenbrock (W) method, second order with a third-
-   order error estimate, L-stable, one Jacobian and one LU per step, the last stage reused as the next first. Chosen over
-   ROS3P because L-stability damps the fastest modes completely (ROS3P's stability function tends to 0.73 at infinity, so
-   very stiff transients ring), which is what Robertson's kinetics and a relaxation oscillator need; ROS3P is the better
-   pick for semi-discretized parabolic PDEs at tight tolerance. jac may be NULL (forward differences). Integrates forward
-   from t0 to t1 >= t0; *h the first step to try (0 picks one) and, after, the last. 0, -1 if the step underflowed (or n is
-   outside 0..46340, t0 or t1 is not finite, or t1 < t0: 1.6.0, which 1.5.6 answered 0 with y unchanged), -2 no memory.
-   As mk_dopri (1.6.1, 1.6.2): steps the size t can take, smaller after a rejection, a NaN step refused. The floor is 1e-14 of
-   the span, so a fast start on a long span needs a call of its own (Robertson's from 0 to 1e11 in one call is -1; 0 to 1, then
-   1 to 1e11, matches Hairer and Wanner); W's LU refuses a pivot under 1e-13 of W's largest entry, which on Robertson's turns away steps past about 1e10. */
+/* Shampine's ode23s (Shampine and Reichelt 1997, the MATLAB ODE suite): a Rosenbrock (W) method, second order with a
+   third-order error estimate, L-stable, one Jacobian and one LU per step, the last stage reused as the next first.
+   Chosen over ROS3P because L-stability damps the fastest modes completely (ROS3P's stability function tends to 0.73 at
+   infinity, so very stiff transients ring), which is what Robertson's kinetics and a relaxation oscillator need; ROS3P
+   (Lang and Verwer 2001) is the better pick for semi-discretized parabolic PDEs at tight tolerance. jac may be NULL
+   (forward differences). Integrates forward from t0 to t1 >= t0; *h the first step to try (0 picks one) and, after, the
+   last. Steps as mk_dopri's: the size t can take, smaller after a rejection, a NaN step refused. 0; -1 if the step
+   underflowed, maxsteps ran out, n is outside 0..46340, t0 or t1 is not finite, or t1 < t0; -2 no memory. The floor is
+   1e-14 of the span, so a fast start on a long span needs a call of its own (Robertson's from 0 to 1e11 in one call is
+   -1; 0 to 1, then 1 to 1e11, matches Hairer and Wanner 1996); W's LU refuses a pivot under 1e-13 of W's largest entry,
+   which on Robertson's turns away steps past about 1e10. */
 static inline int mk_ode23s(mk_odefn f, mk_odejac jac, void *ctx, int n, double t0, double *y, double t1, double *h, mk_stiff_ctl *c)
 {
     const double d = 1 / (2 + sqrt(2.0)), e32 = 6 + sqrt(2.0);
-    if (n < 0 || n > 46340 || !isfinite(t1 - t0) || t1 < t0) return -1; /* the sizes mk_lu refuses; a NaN or infinite t0 or t1; backward */
+    /* the sizes mk_lu refuses; a NaN or infinite t0 or t1; backward */
+    if (n < 0 || n > 46340 || !isfinite(t1 - t0) || t1 < t0) return -1;
     size_t nn = (size_t)n * n;
     double *mem = malloc(sizeof(double) * (2 * nn + 11 * (size_t)n));
     int *piv = malloc(sizeof(int) * (size_t)n);
     if (!mem || !piv) { free(mem), free(piv); return -2; }
     double *J = mem, *W = J + nn, *F0 = W + nn, *F1 = F0 + n, *F2 = F1 + n, *T = F2 + n, *k1 = T + n, *k2 = k1 + n, *k3 = k2 + n;
     double *yn = k3 + n, *z = yn + n, *tmp = z + n, *ys = tmp + n;
-    double t = t0, span = t1 - t0, hh = *h > 0 ? *h : fmax(span * 1e-6, 16 * (nextafter(fabs(t0), INFINITY) - fabs(t0))); /* 1.6.1: as mk_dopri */
+    /* the first guess as mk_dopri's */
+    double t = t0, span = t1 - t0, hh = *h > 0 ? *h : fmax(span * 1e-6, 16 * (nextafter(fabs(t0), INFINITY) - fabs(t0)));
     int ret = 0, needj = 1;
     if (span <= 0) { free(mem), free(piv); return 0; }
     f(t, y, F0, ctx), c->evals++;
@@ -191,8 +198,8 @@ static inline int mk_ode23s(mk_odefn f, mk_odejac jac, void *ctx, int n, double 
         }
         if (c->hmax > 0 && hh > c->hmax) hh = c->hmax;
         double rem = t1 - t, hs = rem - hh < 1e-12 * span ? rem : hh; /* no sliver left before t1 */
-        if (hs != rem) hs = (t + hs) - t; /* 1.6.1: the step t can take, as mk_dopri's */
-        if (hs >= hrej) hs = nextafter(t + hrej, t) - t; /* 1.6.2: as mk_dopri's */
+        if (hs != rem) hs = (t + hs) - t; /* the step t can take, as mk_dopri's */
+        if (hs >= hrej) hs = nextafter(t + hrej, t) - t; /* smaller than the step rejected, as mk_dopri's */
         if (hs < 1e-14 * span) { ret = -1; break; }
         for (size_t i = 0; i < nn; i++) W[i] = -hs * d * J[i];
         for (int i = 0; i < n; i++) W[(size_t)i * n + i] += 1;
@@ -204,7 +211,7 @@ static inline int mk_ode23s(mk_odefn f, mk_odejac jac, void *ctx, int n, double 
         f(t + 0.5 * hs, z, F1, ctx);
         for (int i = 0; i < n; i++) k2[i] = F1[i] - k1[i];
         mk_lu_solve(W, n, piv, k2);
-#if !(defined(MK_MUTATE) && MK_MUTATE == 54)
+#if !(defined(MK_MUTATE) && MK_MUTATE == 54) /* planted fault 54: k1 not added back to k2 */
         for (int i = 0; i < n; i++) k2[i] += k1[i];
 #endif
         for (int i = 0; i < n; i++) yn[i] = y[i] + hs * k2[i];
@@ -216,7 +223,7 @@ static inline int mk_ode23s(mk_odefn f, mk_odejac jac, void *ctx, int n, double 
         for (int i = 0; i < n; i++) {
             double ei = hs / 6 * (k1[i] - 2 * k2[i] + k3[i]), sc = c->atol + c->rtol * fmax(fabs(y[i]), fabs(yn[i]));
             const double q = fabs(ei) / sc;
-            if (q > err || q != q) err = q; /* 1.6.2: a NaN stays a NaN in any component (1.6.1 kept it only in the last; fmax drops it) */
+            if (q > err || q != q) err = q; /* a NaN in any component stays NaN (fmax would drop it) */
         }
         if (!isfinite(err)) err = 1e10;
         if (err > 1) {
@@ -241,11 +248,11 @@ typedef struct {
     long evals, jacs, iters;
 } mk_newton_ctl;
 
-/* One step of BDF1 (backward Euler) or BDF2 with a variable step: order 2 uses yprev from hprev before, the coefficients
-   for the step ratio w = h / hprev, alpha (1+w)^2/(1+2w), (w^2)/(1+2w), beta (1+w)/(1+2w). Solved by Newton with one
-   Jacobian and one LU (simplified Newton; mk_linalg.h); the predictor is linear extrapolation. y advances to t + h and
-   yprev gets the old y. 0, -1 if Newton did not converge (y is left as it was: halve h and retry) or the step was refused
-   (n outside 0..46340, t + h not finite), -2 no memory. */
+/* One step of BDF1 (backward Euler) or BDF2 with a variable step: order 2 uses yprev from hprev before, the
+   coefficients for the step ratio w = h / hprev, alpha (1+w)^2/(1+2w), (w^2)/(1+2w), beta (1+w)/(1+2w). Solved by
+   Newton with one Jacobian and one LU (simplified Newton; mk_linalg.h); the predictor is linear extrapolation. y
+   advances to t + h and yprev gets the old y. 0, -1 if Newton did not converge (y is left as it was: halve h and retry)
+   or the step was refused (n outside 0..46340, t + h not finite), -2 no memory. */
 static inline int mk_bdf_step(mk_odefn f, mk_odejac jac, void *ctx, int n, int order, double t, double *y, double *yprev,
                               double h, double hprev, mk_newton_ctl *c)
 {
@@ -259,7 +266,7 @@ static inline int mk_bdf_step(mk_odefn f, mk_odejac jac, void *ctx, int n, int o
     if (order == 2 && hprev > 0) {
         a1 = (1 + w) * (1 + w) / (1 + 2 * w), a2 = w * w / (1 + 2 * w), beta = (1 + w) / (1 + 2 * w);
 #if defined(MK_MUTATE) && MK_MUTATE == 55
-        beta = 1;
+        beta = 1; /* planted fault: backward Euler's beta in BDF2 */
 #endif
     }
     for (int i = 0; i < n; i++) {
@@ -283,7 +290,7 @@ static inline int mk_bdf_step(mk_odefn f, mk_odejac jac, void *ctx, int n, int o
         for (int i = 0; i < n; i++) {
             Y[i] += r[i];
             const double q = fabs(r[i]) / (c->atol + c->rtol * fabs(Y[i]));
-            if (q > big || q != q) big = q; /* 1.6.2: a NaN fails the step in any component (fmax called it converged, 1.6.0) */
+            if (q > big || q != q) big = q; /* a NaN in any component fails the step (fmax would drop it) */
         }
         c->iters++;
         if (!isfinite(big)) break;

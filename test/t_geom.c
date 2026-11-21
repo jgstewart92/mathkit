@@ -1,10 +1,13 @@
+/* mk_geom against independent references written here: closest point on a triangle (projection and the three edges),
+   ray and triangle (Moller and Trumbore 1997), BVH queries against brute force over every triangle, inside or out
+   against the analytic sphere and torus, crossing pairs against a signed-volume segment test; then edge cases, one row
+   each, against exact values or brute force. */
 #include "../include/mk_geom.h"
 #include "t.h"
 #include "tmesh.h"
 
-/* independent references */
-/* segment pq strictly through triangle abc by signed volumes (p and q strictly either side of its plane, pq strictly inside the
-   three edge wedges), not Moller-Trumbore */
+/* segment pq strictly through triangle abc by signed volumes (p and q strictly either side of its plane, pq strictly
+   inside the three edge wedges), not Moller-Trumbore */
 static double orient_ref(const double *a, const double *b, const double *c, const double *d)
 {
     const double u[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, v[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]}, w[3] = {d[0] - a[0], d[1] - a[1], d[2] - a[2]};
@@ -49,7 +52,8 @@ static double brute_d2(const double *p, const double *a, const double *b, const 
     }
     return best;
 }
-static int mt(const double *o, const double *d, const double *a, const double *b, const double *c, double *t) /* Moller-Trumbore */
+/* ray o + t d against triangle abc, t > 0 (Moller and Trumbore 1997): the reference for mk_ray_tri */
+static int mt(const double *o, const double *d, const double *a, const double *b, const double *c, double *t)
 {
     double e1[3], e2[3], pv[3], tv[3], qv[3];
     for (int k = 0; k < 3; k++) e1[k] = b[k] - a[k], e2[k] = c[k] - a[k], tv[k] = o[k] - a[k];
@@ -196,7 +200,7 @@ int main(void)
     CHECK(mk_bvh_first_hit(&E, (double[3]){0, 0, 0}, (double[3]){1, 0, 0}, 0, INFINITY, &tt, NULL) == -1 && mk_bvh_nearest(&E, qq, 5, &tn, qq) == 5 && tn == -1, "an empty tree answers no hit and nothing near");
     mk_bvh_free(&E);
 
-    /* the verification work's findings on 1.2.2 (Result 87; scratch/the verification work/mk-geom/findings, demo.c and NOTES.md), one row each */
+    /* edge cases, one row each: interval ends, non-finite and huge coordinates, deep trees, ties, slivers */
     {
         static const double V1[] = {0, 0, 1, 1, 0, 1, 0, 1, 1};
         static const int T1[] = {0, 1, 2};
@@ -204,10 +208,9 @@ int main(void)
         mk_bvh_build(&B, V1, T1, 1);
         double o[3] = {0.2, 0.2, 0}, d[3] = {0, 0, 1}, t = -1;
         int h = mk_bvh_first_hit(&B, o, d, 0, 1, &t, NULL), a = mk_bvh_any_hit(&B, o, d, 0, 1);
-        CHECK(h == -1 && a == 0, "F1: a hit at exactly t = tmax is outside the open interval (first hit %d, any hit %d)", h, a);
+        CHECK(h == -1 && a == 0, "a hit at exactly t = tmax is outside the open interval (first hit %d, any hit %d)", h, a);
         mk_bvh_free(&B);
     }
-#ifndef T_OLD /* 1.2.2 writes off the stack here */
     {
         int ok = 0;
         for (int mode = 0; mode < 4; mode++) {
@@ -228,9 +231,8 @@ int main(void)
             ok += (r == 0 || r == -1) && (r || mk_bvh_first_hit(&B, o, d, 0, INFINITY, &th, NULL) == 3);
             if (!r) mk_bvh_free(&B);
         }
-        CHECK(ok == 4, "F2: a tree over a NaN, an infinite or a 1e308 vertex builds (or refuses) and still finds the good triangles (%d of 4)", ok);
+        CHECK(ok == 4, "a tree over a NaN, an infinite or a 1e308 vertex builds (or refuses) and still finds the good triangles (%d of 4)", ok);
     }
-#endif
     {
         int nd = 0;
         static double W[9 * 6006];
@@ -266,7 +268,7 @@ int main(void)
             double ndd = mk_bvh_nearest(&B, c, INFINITY, &tn, q);
             nn += tn != bn || ndd != bd;
         }
-        CHECK(fh == 0 && ch == 0 && nn == 0, "F3: 6006 triangles from 2^-500 to 2^500 (a deep tree): 2002 queries, first hit %d, hit count %d, nearest %d differ from brute force", fh, ch, nn);
+        CHECK(fh == 0 && ch == 0 && nn == 0, "6006 triangles from 2^-500 to 2^500 (a deep tree): 2002 queries, first hit %d, hit count %d, nearest %d differ from brute force", fh, ch, nn);
         mk_bvh_free(&B);
     }
     {
@@ -280,19 +282,19 @@ int main(void)
             in += mk_bvh_inside(&B, (double[3]){0, 0, 0});
             mk_bvh_free(&B);
         }
-        CHECK(in == 2, "F4: the centre of a cube is inside, with either diagonal on its faces (rays through edges don't vote): %d of 2", in);
+        CHECK(in == 2, "the centre of a cube is inside, with either diagonal on its faces (rays through edges don't vote): %d of 2", in);
     }
     {
         mk_bvh B;
         const int r = mk_bvh_build(&B, V, T, 1 << 30), r2 = mk_bvh_build(&B, V, T, -2147483643);
-        CHECK(r == -1 && r2 == -1, "F6: a tree of 2^30 or a negative count of triangles is refused before 2 nt + 1 overflows (%d, %d)", r, r2);
+        CHECK(r == -1 && r2 == -1, "a tree of 2^30 or a negative count of triangles is refused before 2 nt + 1 overflows (%d, %d)", r, r2);
     }
     {
         double o[3] = {-0x1.854316adb7bdp+0, 0x1.7c7cae7cb20dfp+0, 0x1.058a117099cfp-3}, d[3] = {0, -2, 1};
         double a[3] = {0x1p-42, 0, 0}, b[3] = {0x1.004189374bc6ap-42, 0, 0}, c[3] = {0x1p-42, 0x1.0624dd2f1a9fcp-52, 0}, t, br[3];
         mk_ray r = mk_ray_make(o, d);
         const int h = mk_ray_tri(&r, a, b, c, 0, INFINITY, &t, br);
-        CHECK(h == 0, "F7: a ray 1.5 from a triangle of 2^-52 is no hit (%d)", h);
+        CHECK(h == 0, "a ray 1.5 from a triangle of 2^-52 is no hit (%d)", h);
     }
     {
         double p[3] = {-0x1.a60414e4274d8p-3, -0x1.a15ed8c36a34p-5, -0x1.b6ef39b22ebb8p-2}, a[3] = {-0x1.391f6886a282p-1, 0x1.a28cd13d467dcp-2, -0x1.164dfaf3d1da8p-1};
@@ -300,13 +302,13 @@ int main(void)
         double w[3], q[3], d = mk_closest_pt_tri(p, a, b, c, w, q);
         double p2[3] = {-4, -7, 8}, a2[3] = {7, -6, 3}, b2[3] = {7, 6, 7}, c2[3] = {7, 0x1.a1a286ea9c3b8p+0, 0x1.62cd8b3e37afap+2}, w2[3], q2[3];
         double d2 = mk_closest_pt_tri(p2, a2, b2, c2, w2, q2);
-        CHECK(fabs(d - 0.0020183485327915739) <= 1e-15 && fabs(d2 - 146.6) <= 1e-12, "F8a: closest point on two slivers: %.17g (exact 0.0020183485327915739), %.17g (exact 146.6)", d, d2);
+        CHECK(fabs(d - 0.0020183485327915739) <= 1e-15 && fabs(d2 - 146.6) <= 1e-12, "closest point on two slivers: %.17g (exact 0.0020183485327915739), %.17g (exact 146.6)", d, d2);
     }
     {
         double p[3] = {-8, 2, 7}, a[3] = {2, -5, -4}, c[3] = {0x1.fffffffffffffp+0, -5, -4}, w[3], q[3];
         double d = mk_closest_pt_tri(p, a, a, c, w, q), e = c[0] - a[0], t = fmin(1, fmax(0, (p[0] - a[0]) / e)), s = 0;
         for (int k = 0; k < 3; k++) { double x = a[k] + (k == 0 ? t * e : 0) - p[k]; s += x * x; }
-        CHECK(fabs(d - s) <= 1e-12 * s && w[0] == w[0] && w[1] == w[1] && w[2] == w[2], "F9: closest point on a triangle with a repeated corner: %.17g (the segment: %.17g), weights not NaN", d, s);
+        CHECK(fabs(d - s) <= 1e-12 * s && w[0] == w[0] && w[1] == w[1] && w[2] == w[2], "closest point on a triangle with a repeated corner: %.17g (the segment: %.17g), weights not NaN", d, s);
     }
     {
         double o[3] = {0x1.14699deba4d1cp+0, 0x1.f2738091721f4p-1, 0x1.1d966d08fd674p+0}, d[3] = {-0x1.1473a42358bc4p+0, -0x1.f273836cf2dcp-1, -0x1.c2db25017bf6ep-1};
@@ -314,7 +316,7 @@ int main(void)
         double c[3] = {-0x1.9764ea4020f28p+34, 0x1.78ac2f5dc9f2p-2, -0x1.f4f9f1e772d54p-6}, t = -1, br[3];
         mk_ray r = mk_ray_make(o, d);
         const int h = mk_ray_tri(&r, a, b, c, 0, INFINITY, &t, br);
-        CHECK(h && fabs(t - 1.2705559762972542) < 1e-6, "F10: a 5e10-wide triangle 1.5 from the origin: hit %d at t %.17g (exact 1.2705559762972542)", h, t);
+        CHECK(h && fabs(t - 1.2705559762972542) < 1e-6, "a 5e10-wide triangle 1.5 from the origin: hit %d at t %.17g (exact 1.2705559762972542)", h, t);
     }
     {
         double o[3] = {0x1.eceec5b961cb7p+0, -0x1.20a08cfe2cf0ep-1, -0x1.f8eae8d2b34adp+0}, d[3] = {-0x1.b27ac90e4303cp-2, 0, -0x1.d3f80b09f012p-1};
@@ -333,9 +335,9 @@ int main(void)
         double te;
         mk_aabb_empty(&bx), mk_aabb_add(&bx, W), mk_aabb_add(&bx, W + 3), mk_aabb_add(&bx, W + 6);
         const int in = h ? mk_aabb_ray(&bx, &r, tmin, t, &te) : -1;
-        CHECK(h && in == 1 && hb == 0 && tb == t, "F12: a thin triangle 1e11 wide: its own box holds the hit (%d), and the tree finds it (%d, %d)", in, h, hb);
+        CHECK(h && in == 1 && hb == 0 && tb == t, "a thin triangle 1e11 wide: its own box holds the hit (%d), and the tree finds it (%d, %d)", in, h, hb);
     }
-    { /* F5: two faces of a scaled cube tie exactly at p (the verification work's battery, seed 101 op 5 round 165): the lower index wins */
+    { /* two faces of a scaled cube tie exactly at p (a case found by a random search): the lower index wins */
         static const double Q[] = {0x0p+0, -0x1.1p+11, 0x1.8p+8, 0x0p+0, -0x1.ep+10, 0x1.8p+8, 0x0p+0, -0x1.ep+10, 0x1.4p+9, 0x0p+0, -0x1.1p+11, 0x1.4p+9,
                                    0x1p+8, -0x1.1p+11, 0x1.8p+8, 0x1p+8, -0x1.ep+10, 0x1.8p+8, 0x1p+8, -0x1.ep+10, 0x1.4p+9, 0x1p+8, -0x1.1p+11, 0x1.4p+9};
         static const int QT[] = {0, 3, 1, 1, 3, 2, 4, 5, 7, 5, 6, 7, 0, 7, 3, 0, 4, 7, 1, 2, 6, 1, 6, 5, 0, 1, 4, 4, 1, 5, 3, 7, 2, 7, 6, 2};
@@ -350,10 +352,9 @@ int main(void)
         mk_bvh_build(&B, Q, QT, 12);
         const double nd = mk_bvh_nearest(&B, p, INFINITY, &tn, q);
         mk_bvh_free(&B);
-        CHECK(tn == bn && nd == bd && bn == 7, "F5: an exact tie in the nearest distance goes to the lower index, as brute force: the tree %d, brute force %d", tn, bn);
+        CHECK(tn == bn && nd == bd && bn == 7, "an exact tie in the nearest distance goes to the lower index, as in brute force: the tree %d, brute force %d", tn, bn);
     }
-#ifndef T_OLD
-    { /* mk_bvh_box (1.3.0, for mk_sepvol) against every triangle's box, on the torus and boxes that only touch */
+    { /* mk_bvh_box against every triangle's box, on the torus, with boxes that only touch counted as meeting */
         torus(64, 32, 2, 0.7);
         mk_bvh B;
         mk_bvh_build(&B, V, T, nt);
@@ -386,8 +387,8 @@ int main(void)
         CHECK(bad == 0 && tot > 1000 && mk_bvh_box(&B, &(mk_aabb){{9, 9, 9}, {10, 10, 10}}, NULL, 0) == 0, "box query against every triangle's box: 2000 boxes, %d triangles found, %d wrong", tot, bad);
         mk_bvh_free(&B);
     }
-    { /* 1.5.2: mk_bvh_crossings (the maintainer's local crossing count) against brute force over every pair, on two spheres sunk into each
-         other as one mesh: all pairs, and only those with a face marked (centroid x > 0.6, about where they cross) */
+    { /* mk_bvh_crossings against brute force over every pair, on two spheres sunk into each other as one mesh: all
+         pairs, and only those with a face marked (centroid x > 0.6, about where they cross) */
         tm_mesh M = {0};
         const double c0[3] = {0, 0, 0}, c1[3] = {1.2, 0.1, 0.05};
         tm_sphere(&M, 1, c0, 3), tm_sphere(&M, 1, c1, 3);
@@ -411,9 +412,10 @@ int main(void)
         CHECK(ca == all && cm == marked && marked > 0 && marked < all, "crossing pairs of two spheres sunk into each other: %ld (brute force %ld); with a face marked %ld (brute force %ld)", ca, all, cm, marked);
         free(mark), tm_free(&M);
     }
-    { /* 1.5.3: the hits' facings summed along a ray (mk_bvh_count_wind_, mk_sepvol's winding number on a closed mesh) against the
-         brute-force winding number, on the same two spheres (covered twice where they overlap): at 3000 points in a box round them,
-         every ray with no edge hit sums to the winding number rounded, and counts what mk_bvh_count_hits counts */
+    { /* the hits' facings summed along a ray (mk_bvh_count_wind_, which mk_sepvol uses as the winding number on a
+         closed mesh) against mk_winding_number, on the same two spheres (covered twice where they overlap): at 3000
+         points in a box round them, every ray with no edge hit sums to the winding number rounded, and counts what
+         mk_bvh_count_hits counts */
         tm_mesh M = {0};
         const double c0[3] = {0, 0, 0}, c1[3] = {1.2, 0.1, 0.05};
         tm_sphere(&M, 1, c0, 3), tm_sphere(&M, 1, c1, 3);
@@ -435,12 +437,13 @@ int main(void)
               nray - bad, nray, cls[0], cls[1], cls[2], worst);
         tm_free(&M);
     }
-#endif
-    { /* review 2 #13 (1.6.1): where no ray votes, the winding number decides, and 1.6.0 took its sign: a closed mesh wound inward read outside
-         there and inside everywhere the parity decides. A tetrahedron with a vertex on each fixed ray from the origin, both windings. */
+    { /* where no ray votes (each of mk_bvh_inside's three fixed rays hits an edge or a vertex), the winding number
+         decides by its magnitude, not its sign, so a closed mesh wound inward still reads inside, as the parity says
+         elsewhere. A tetrahedron with a vertex on each fixed ray from the origin, both windings. */
+        /* mk_bvh_inside's three ray directions */
         static const double dirs[3][3] = {{0.5773502691896258, 0.5773502691896258, 0.5773502691896258},
                                           {-0.3015113445777636, 0.9045340337332909, 0.3015113445777636},
-                                          {0.2672612419124244, -0.5345224838248488, 0.8017837257372732}}; /* mk_bvh_inside's */
+                                          {0.2672612419124244, -0.5345224838248488, 0.8017837257372732}};
         double V[12];
         for (int k = 0; k < 3; k++)
             for (int a = 0; a < 3; a++) V[3 * k + a] = 2 * dirs[k][a];
@@ -457,12 +460,12 @@ int main(void)
         }
         const double wo = mk_winding_number(V, To, 4, o), wi = mk_winding_number(V, Ti, 4, o);
         const int io = mk_bvh_inside(&Bo, o), ii = mk_bvh_inside(&Bi, o);
-        CHECK(ed == 3 && wo > 0.5 && wi < -0.5 && io == 1 && ii == 1, "review 2 #13: the origin inside a tetrahedron whose vertices sit on the 3 rays (%d through a vertex): winding %g and %g, inside %d and %d",
+        CHECK(ed == 3 && wo > 0.5 && wi < -0.5 && io == 1 && ii == 1, "no ray votes: the origin inside a tetrahedron whose vertices sit on the 3 rays (%d through a vertex), wound either way: winding %g and %g, inside %d and %d",
               ed, wo, wi, io, ii);
         mk_bvh_free(&Bo), mk_bvh_free(&Bi);
     }
-    { /* review 2 #19 (1.6.1): mk_bvh_free left nt, so a query after a free (or after a build that failed for memory) took the
-         tree as there and read node NULL */
+    { /* mk_bvh_free zeroes nt, so a query after a free (or after a build that failed for memory) finds no tree instead
+         of reading a NULL node */
         static const double V[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
         static const int T[3] = {0, 1, 2};
         const double o[3] = {0.2, 0.2, 1}, d[3] = {0, 0, -1};
@@ -472,7 +475,7 @@ int main(void)
         const int h0 = mk_bvh_first_hit(&B, o, d, 0, INFINITY, &t, NULL);
         mk_bvh_free(&B);
         const int nt = B.nt, h1 = nt ? -9 : mk_bvh_first_hit(&B, o, d, 0, INFINITY, &t, NULL);
-        CHECK(h0 == 0 && nt == 0 && h1 == -1, "review 2 #19: a freed tree has nt %d and a query on it finds nothing (%d; before the free %d)", nt, h1, h0);
+        CHECK(h0 == 0 && nt == 0 && h1 == -1, "a freed tree has nt %d and a query on it finds nothing (%d; before the free %d)", nt, h1, h0);
     }
     return wrong;
 }

@@ -1,3 +1,5 @@
+/* mk_spec.h: Parseval and amplitude scaling with every window, Welch's density of white noise, the coherence and
+   transfer function of a known linear system, Blackman-Harris's published sidelobe, STFT zero padding, the refusals. */
 #include "../include/mk_spec.h"
 #include "../include/mk_rng.h"
 #include "t.h"
@@ -63,7 +65,7 @@ int main(void)
     }
     CHECK(ce < 0.03 && he < 0.05, "coherence of a known linear system with noise: worst error %.3f; transfer function worst error %.3f", ce, he);
 
-    /* Blackman-Harris's highest sidelobe: about -92 dB */
+    /* Blackman-Harris's highest sidelobe: about -92 dB (Harris 1978) */
     enum { WN = 64, Z = 8192 };
     double bw[WN];
     mk_window(MK_WIN_BLACKMAN_HARRIS, WN, 0, bw);
@@ -86,7 +88,7 @@ int main(void)
     for (int k = 0; k <= NF / 2; k++) fe = fmax(fe, cabs(F1[k] - F2[k]));
     CHECK(fe == 0, "an STFT frame past the end of the signal is zero-padded (difference %.2g)", fe);
     free(w), free(z), mk_fft_free(&pz), mk_spec_free(&s);
-    { /* 1.6.0, the review's N2: an unknown window or an fs not positive and finite is refused; 1.5.6 took them as rectangular and 1 */
+    { /* an unknown window, or an fs that is not positive and finite, is refused (-1) */
         mk_spec b;
         const int r7 = mk_spec_init(&b, 64, 7, 0, 1000);
         mk_spec_free(&b);
@@ -100,7 +102,7 @@ int main(void)
         mk_spec_free(&b);
         const int rk = mk_spec_init(&b, 64, MK_WIN_KAISER, 8.6, 48000);
         mk_spec_free(&b);
-        CHECK(r7 == -1 && rm == -1 && r0 == -1 && rn == -1 && ri == -1 && rk == 0, "N2 (review): spec init refuses window 7 and -1, fs 0, NaN and inf (%d %d %d %d %d); Kaiser at 48 kHz is 0 (%d)", r7,
+        CHECK(r7 == -1 && rm == -1 && r0 == -1 && rn == -1 && ri == -1 && rk == 0, "spec init refuses window 7 and -1, fs 0, NaN and inf (%d %d %d %d %d); Kaiser at 48 kHz is 0 (%d)", r7,
               rm, r0, rn, ri, rk);
     }
     return wrong;

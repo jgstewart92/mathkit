@@ -1,9 +1,10 @@
 /* mathkit: how the kit threads. A caller that builds with -fopenmp gets OpenMP threads in the kit's hot loops; one that
-   does not gets no threads at all (the pragmas compile out) and the same bits. Work is cut into blocks whose length depends
-   on the item count only, never on the thread count. Each block is a serial function; a sum gives each block a partial and
-   adds the partials in block order. So a result is the same at any thread count and without OpenMP, and the block function
-   is the reference form a proof reads. Inside a caller's own parallel region the kit's loops run on that one thread (OpenMP's
-   default of one active level). Header only, C23. */
+   does not gets no threads at all (the pragmas compile out) and the same bits. Work is cut into blocks whose length
+   depends on the item count only, never on the thread count. Each block is a serial function; a sum gives each block a
+   partial and adds the partials in block order. So a result is the same at any thread count and without OpenMP, and the
+   block function is the serial reference form of the loop. Inside a caller's own parallel region the kit's loops run on
+   that one thread (OpenMP's default of one active level). The underscore-suffixed macros are internal to the kit.
+   Header only, C23. */
 #ifndef MK_PAR_H
 #define MK_PAR_H
 #ifdef _OPENMP
@@ -30,15 +31,14 @@
 #endif
 
 enum { MK_PAR_BLK = 4096, MK_PAR_NBLK = 256 };
-/* the block length for n items: MK_PAR_BLK, or longer so there are at most MK_PAR_NBLK blocks. A function of n alone. The
-   ceilings are n / k + (n % k != 0) (1.5.3): 1.5.2's (n + k - 1) / k overflowed a long within k of LONG_MAX (the verification work H18);
-   wherever that did not overflow the two are equal, so every block is 1.5.2's. */
+/* the block length for n items: MK_PAR_BLK, or longer so there are at most MK_PAR_NBLK blocks; a function of n alone.
+   Ceilings are n / k + (n % k != 0), which cannot overflow within k of LONG_MAX as (n + k - 1) / k would. */
 static inline long mk_par_blk(long n)
 {
 #if defined(MK_MUTATE) && MK_MUTATE == 211
-    const long b = (n + MK_PAR_NBLK - 1) / MK_PAR_NBLK; /* 211: 1.5.2's ceilings, overflowing near LONG_MAX */
+    const long b = (n + MK_PAR_NBLK - 1) / MK_PAR_NBLK; /* planted fault: ceilings that overflow near LONG_MAX */
 #else
-    const long b = n / MK_PAR_NBLK + (n % MK_PAR_NBLK != 0); /* n <= 0: at most 1 here, at most 0 in 1.5.2: MK_PAR_BLK either way */
+    const long b = n / MK_PAR_NBLK + (n % MK_PAR_NBLK != 0); /* n <= 0 gives MK_PAR_BLK */
 #endif
     return b > MK_PAR_BLK ? b : MK_PAR_BLK;
 }
@@ -59,7 +59,8 @@ static inline void mk_par_range(long n, long k, long *i0, long *i1)
 #if defined(MK_MUTATE) && MK_MUTATE == 211
     *i0 = k * b, *i1 = (k + 1) * b < n ? (k + 1) * b : n;
 #else
-    *i0 = k * b, *i1 = b < n - *i0 ? *i0 + b : n; /* k b < n: no overflow; 1.5.2's (k + 1) b passed LONG_MAX on the last block there */
+    /* k b < n: no overflow, where (k + 1) b can pass LONG_MAX on the last block */
+    *i0 = k * b, *i1 = b < n - *i0 ? *i0 + b : n;
 #endif
 }
 /* stmt (a call of a block function on [i0, i1)) for every block of n items, the blocks spread over the threads */
@@ -73,10 +74,10 @@ static inline void mk_par_range(long n, long k, long *i0, long *i1)
             stmt;                                                                                                        \
         }                                                                                                                \
     } while (0)
-/* out = the sum of part (a block function's partial on [i0, i1)) over the blocks of n items, added in block order; one block
-   gives the block function's own sum */
+/* out = the sum of part (a block function's partial on [i0, i1)) over the blocks of n items, added in block order; one
+   block gives the block function's own sum */
 #if defined(MK_MUTATE) && MK_MUTATE == 107
-/* 107: the partials added by OpenMP's reduction(+:), whose order of adding follows the thread count */
+/* planted fault: the partials added by OpenMP's reduction(+:), whose order of adding follows the thread count */
 #define MK_PAR_SUM_(n, i0, i1, part, out)                                                                                \
     do {                                                                                                                 \
         const long mk_n_ = (n), mk_nb_ = mk_par_nblk(mk_n_);                                                             \

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Negative controls for test/judge.sh, the rules behind check.sh's "wrong: 0" (Codex's evaluation of 1.5.3): each known-bad input must
-# get the verdict named here, on small programs in build/drv. Prints one line a control and exits with the count that did not. check.sh
+# Negative controls for test/judge.sh, the rules behind check.sh's "wrong: 0": each known-bad input must get the verdict
+# named here, on small programs in build/drv. Prints one line a control and exits with the count that did not. check.sh
 # runs it; CC and CFLAGS as there (without -fopenmp).
 cd "$(dirname "$0")/.." || exit 2
 S=$PWD W=$PWD/build/drv CC=${CC:-gcc} CFLAGS=${CFLAGS:--std=c23 -O2 -ffp-contract=off -Wall -Wextra -Wpedantic -Werror}
@@ -22,7 +22,7 @@ prog "$good" 'puts("PASS  a row"); fflush(stdout); for (;;) pause();'
 try 901 "" 1; say "a fault that hangs" "WRONG (timeout" "$W/out" "a hang"
 prog "$good" 'puts("FAIL  a row"); fflush(stdout); for (;;) pause();'
 try 901 "" 1; say "a hang after a FAIL row" "WRONG (timeout" "$W/out" "a hang after a row"
-prog "$good" 'for (int i = 0; i < 124; i++) { puts("FAIL  a row"); } fflush(stdout); for (;;) pause();' # 1.6.2: timeout's 124 = the row count (review 2 J1)
+prog "$good" 'for (int i = 0; i < 124; i++) { puts("FAIL  a row"); } fflush(stdout); for (;;) pause();' # timeout's exit 124 equal to the row count
 try 901 "" 1; say "124 FAIL rows, then a hang" "WRONG (timeout" "$W/out" "a hang after 124 rows"
 prog "$good" 'puts("PASS  a row"); fflush(stdout); abort();'
 try 901; say "a crash not on the list" "WRONG (not caught: signal:6" "$W/out" "a crash, not listed"
@@ -55,8 +55,8 @@ par "$twobits" 2 build; say "the OpenMP build failed, stale outputs there" "WRON
 par "$twobits" 3; say "fewer lines than the test prints" "WRONG (2 lines, the test prints 3" "$W/out" "BITS, count"
 par 'puts("PASS  x"); puts("BITS  a 1"); puts("BITS  b 3"); return 0;' 2; say "different lines" "WRONG (they differ" "$W/out" "BITS, differ"
 
-# negctl's BITS control when the build without OpenMP cannot be made, and when it is made but prints no BITS line (1.5.4 read that empty
-# list as "they differ", so as caught): neither may read as caught
+# negctl's BITS control when the build without OpenMP cannot be made, and when it is made but prints no BITS line (an
+# empty list must not read as "they differ"): neither may read as caught
 printf '#!/bin/sh\nfor a; do [ "$a" = -DMK_MUTATE=97 ] && exit 1; done\nexec %s "$@"\n' "$CC" > "$W/cc97" && chmod +x "$W/cc97"
 CC="$W/cc97" CFLAGS="$CFLAGS" sh "$S/test/negctl.sh" 4 > "$W/out" 2>&1
 say "negctl's control 4 with its build failing" "WRONG (not caught" "$W/out" "negctl, failed build"

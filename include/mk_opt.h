@@ -1,7 +1,8 @@
-/* mathkit: minimization. Nelder-Mead (no derivatives, up to MK_NM_MAX parameters), Levenberg-Marquardt for sums of squares
-   (Jacobian given or by forward differences), golden-section search on an interval, L-BFGS with a strong-Wolfe line search
-   (gradients given), CMA-ES (no derivatives; for rugged, rotated or ill-conditioned problems). Each finds a low place, not
-   necessarily the lowest: start from several places where that matters. Header only, C23; uses mk_linalg.h and mk_rng.h. */
+/* mathkit: minimization. Nelder-Mead (no derivatives, up to MK_NM_MAX parameters), Levenberg-Marquardt for sums of
+   squares (Jacobian given or by forward differences), golden-section search on an interval, L-BFGS with a strong-Wolfe
+   line search (gradients given), CMA-ES (no derivatives; for rugged, rotated or ill-conditioned problems). Each finds a
+   low place, not necessarily the lowest: start from several places where that matters. Header only, C23; uses
+   mk_linalg.h and mk_rng.h. */
 #ifndef MK_OPT_H
 #define MK_OPT_H
 #include "mk_linalg.h"
@@ -13,9 +14,10 @@
 typedef double (*mk_fn)(const double *p, void *ctx);
 
 /* Nelder-Mead with the standard coefficients (reflect 1, expand 2, contract 1/2, shrink 1/2; Lagarias et al. 1998).
-   p: start and result; step: the first simplex's size along each parameter. Stops when the spread of values is below tol on
-   two iterations running (1.6.2: a simplex whose values tie across the minimum, x^2 from -3.5 with step 1 at {-0.5, 0.5}, stopped
-   there; 1.6.1 skipped only the start's tie) or after iters iterations. Returns the value at p; *evals (if given) counts calls of fn. */
+   p: start and result; step: the first simplex's size along each parameter. Stops when the spread of values is below
+   tol on two iterations running (so a simplex whose values tie across the minimum, as x^2 at {-0.5, 0.5}, moves on) or
+   after iters iterations. Returns the value at p, or NaN for n outside 1..MK_NM_MAX; *evals (if given) counts calls of
+   fn. */
 #define MK_NM_MAX 16
 static inline double mk_nm(mk_fn fn, void *ctx, int n, double *p, const double *step, int iters, double tol, long *evals)
 {
@@ -33,9 +35,10 @@ static inline double mk_nm(mk_fn fn, void *ctx, int n, double *p, const double *
         for (int i = 1; i <= n; i++) { if (v[i] > v[hi]) hi = i; if (v[i] < v[lo]) lo = i; }
         nh = lo;
         for (int i = 0; i <= n; i++) if (i != hi && v[i] > v[nh]) nh = i; /* second worst */
-        if (!(v[hi] - v[lo] >= tol)) { if (flat) break; flat = 1; } else flat = 0; /* 1.6.2: under tol twice running (a tie across the minimum moves on) */
+        if (!(v[hi] - v[lo] >= tol)) { if (flat) break; flat = 1; } else flat = 0; /* under tol twice running */
 #if defined(MK_MUTATE) && MK_MUTATE == 41
-        for (int j = 0; j < n; j++) { c[j] = 0; for (int i = 0; i <= n; i++) c[j] += s[i][j]; c[j] /= n + 1; } /* the worst point kept in the centroid */
+        /* planted fault: the worst point kept in the centroid */
+        for (int j = 0; j < n; j++) { c[j] = 0; for (int i = 0; i <= n; i++) c[j] += s[i][j]; c[j] /= n + 1; }
 #else
         for (int j = 0; j < n; j++) { c[j] = 0; for (int i = 0; i <= n; i++) if (i != hi) c[j] += s[i][j]; c[j] /= n; }
 #endif
@@ -79,14 +82,14 @@ typedef struct {
     double lambda0; /* first damping, default 1e-3 */
 } mk_lm_opts;
 
-/* Levenberg-Marquardt: minimize sum r_i^2 over p (n <= MK_LM_MAX). Marquardt's scaling, damping lambda * (diag(JTJ) + tiny),
-   divided by 3 on success and multiplied by 4 on failure (10 when the damped system is not positive definite).
+/* Levenberg-Marquardt: minimize sum r_i^2 over p (n <= MK_LM_MAX). Marquardt's scaling, damping lambda * (diag(JTJ) +
+   tiny), divided by 3 on success and multiplied by 4 on failure (10 when the damped system is not positive definite).
    jac may be NULL: forward differences with step sqrt(eps) * max(|p_j|, 1). Returns the final sum of squares, or -1 for
    no memory or a size out of range. */
 #define MK_LM_MAX 64
 static inline double mk_lm(mk_resfn res, mk_jacfn jac, void *ctx, int m, int n, double *p, const mk_lm_opts *o)
 {
-    if (n < 1 || n > MK_LM_MAX || m < 1 || m > INT_MAX / (3 + n)) return -1; /* keeps the block under 2^34 bytes (the verification work, Results 74, 77) */
+    if (n < 1 || n > MK_LM_MAX || m < 1 || m > INT_MAX / (3 + n)) return -1; /* keeps the work block under 2^34 bytes */
     int iters = o && o->iters > 0 ? o->iters : 200;
     double ftol = o && o->ftol > 0 ? o->ftol : 1e-12, lambda = o && o->lambda0 > 0 ? o->lambda0 : 1e-3;
     double *r = malloc(sizeof(double) * (3 * (size_t)m + (size_t)m * n));
@@ -111,7 +114,7 @@ static inline double mk_lm(mk_resfn res, mk_jacfn jac, void *ctx, int m, int n, 
             double s = 0;
             for (int i = 0; i < m; i++) s += J[(size_t)i * n + a] * r[i];
 #if defined(MK_MUTATE) && MK_MUTATE == 42
-            g[a] = s;
+            g[a] = s; /* planted fault: the gradient's sign */
 #else
             g[a] = -s;
 #endif
@@ -136,7 +139,8 @@ static inline double mk_lm(mk_resfn res, mk_jacfn jac, void *ctx, int m, int n, 
             if (c2 < cost) {
                 double drop = cost - c2;
                 memcpy(p, pt, sizeof(double) * (size_t)n), memcpy(r, r2, sizeof(double) * (size_t)m);
-                cost = c2, lambda = fmax(lambda / 3, 1e-30), accepted = drop > ftol * (cost + drop) || lambda > 1e-9 ? 1 : 2; /* a small drop under heavy damping is not convergence */
+                /* a small drop under heavy damping is not convergence */
+                cost = c2, lambda = fmax(lambda / 3, 1e-30), accepted = drop > ftol * (cost + drop) || lambda > 1e-9 ? 1 : 2;
             } else lambda *= 4;
         }
         if (accepted != 1) break;
@@ -145,8 +149,8 @@ static inline double mk_lm(mk_resfn res, mk_jacfn jac, void *ctx, int m, int n, 
     return cost;
 }
 
-/* golden-section search for a minimum of a unimodal f on [a, b], until the bracket is narrower than tol (absolute);
-   returns the minimizer, *fmin its value */
+/* golden-section search for a minimum of a unimodal f on [a, b], until the bracket is narrower than tol (absolute) or
+   after 400 steps; returns the minimizer, *fmin (if given) its value */
 typedef double (*mk_fn1)(double x, void *ctx);
 static inline double mk_golden(mk_fn1 f, void *ctx, double a, double b, double tol, double *fmin)
 {
@@ -154,7 +158,7 @@ static inline double mk_golden(mk_fn1 f, void *ctx, double a, double b, double t
     double x1 = b - g * (b - a), x2 = a + g * (b - a), f1 = f(x1, ctx), f2 = f(x2, ctx);
     for (int it = 0; it < 400 && fabs(b - a) > tol; it++) {
 #if defined(MK_MUTATE) && MK_MUTATE == 43
-        if (f1 > f2) {
+        if (f1 > f2) { /* planted fault: keeps the worse side */
 #else
         if (f1 < f2) {
 #endif
@@ -190,8 +194,8 @@ static inline double mk_ls_eval_(mk_fgfn fg, void *ctx, int n, const double *x, 
     *slope = s;
     return f;
 }
-/* a step satisfying the strong Wolfe conditions (Nocedal and Wright, Algorithms 3.5 and 3.6; c1 1e-4, c2 0.9), with
-   safeguarded cubic interpolation in the zoom. 0 found (xn, gn, *fn hold it), -1 not. */
+/* a step satisfying the strong Wolfe conditions (Nocedal and Wright 2006, Algorithms 3.5 and 3.6; c1 1e-4, c2 0.9),
+   with safeguarded cubic interpolation in the zoom. 0 found (xn, gn, *fn hold it), -1 not. */
 static inline int mk_wolfe_(mk_fgfn fg, void *ctx, int n, const double *x, double f0, double s0, const double *d, double a1,
                             double *xn, double *gn, double *fn, long *ev)
 {
@@ -232,13 +236,15 @@ static inline int mk_wolfe_(mk_fgfn fg, void *ctx, int n, const double *x, doubl
     return -1;
 }
 
-/* L-BFGS (Nocedal 1980, the two-loop recursion; the first scaling s.y / y.y). x: start and result. Returns f at x. */
+/* L-BFGS (Nocedal 1980, the two-loop recursion; the first scaling s.y / y.y). x: start and result. Returns f at x, or
+   NaN with status -1 for n < 0, a work size past SIZE_MAX, or no memory. o may be NULL (the defaults). */
 static inline double mk_lbfgs(mk_fgfn fg, void *ctx, int n, double *x, mk_lbfgs_opts *o)
 {
     int m = o && o->m > 0 ? o->m : 8, iters = o && o->iters > 0 ? o->iters : 1000;
     double gtol = o && o->gtol > 0 ? o->gtol : 1e-10, ftol = o && o->ftol > 0 ? o->ftol : 1e-16;
     size_t per = 2 * (size_t)m + 5; /* in size_t: 2 m + 5 overflows int from m = 2^30 - 2 */
-    if (n < 0 || (n > 0 && per > (SIZE_MAX / sizeof(double) - 2 * (size_t)m) / (size_t)n)) { if (o) o->status = -1, o->iters_used = 0, o->evals = 0; return NAN; } /* 1.6.2: no count left from an earlier run */
+    /* refused: o's counts zeroed, not left from an earlier run */
+    if (n < 0 || (n > 0 && per > (SIZE_MAX / sizeof(double) - 2 * (size_t)m) / (size_t)n)) { if (o) o->status = -1, o->iters_used = 0, o->evals = 0; return NAN; }
     double *w = malloc(sizeof(double) * (per * (size_t)n + 2 * (size_t)m));
     if (!w) { if (o) o->status = -1, o->iters_used = 0, o->evals = 0; return NAN; }
     double *S = w, *Y = S + (size_t)m * n, *g = Y + (size_t)m * n, *d = g + n, *xn = d + n, *gn = xn + n, *q = gn + n;
@@ -248,7 +254,8 @@ static inline double mk_lbfgs(mk_fgfn fg, void *ctx, int n, double *x, mk_lbfgs_
     int used = 0, head = 0, status = 2, it;
     for (it = 0; it < iters; it++) {
         double gmax = 0;
-        for (int i = 0; i < n; i++) gmax = fabs(g[i]) > gmax || isnan(g[i]) ? fabs(g[i]) : gmax; /* a NaN stays: not small */
+        /* a NaN stays: not small */
+        for (int i = 0; i < n; i++) gmax = fabs(g[i]) > gmax || isnan(g[i]) ? fabs(g[i]) : gmax;
         if (gmax <= gtol) { status = 0; break; }
         for (int i = 0; i < n; i++) q[i] = g[i];
         for (int j = 0; j < used; j++) {
@@ -277,7 +284,7 @@ static inline double mk_lbfgs(mk_fgfn fg, void *ctx, int n, double *x, mk_lbfgs_
             for (int i = 0; i < n; i++) b += Y[(size_t)s * n + i] * q[i];
             b *= rho[s];
 #if defined(MK_MUTATE) && MK_MUTATE == 44
-            for (int i = 0; i < n; i++) q[i] -= S[(size_t)s * n + i] * (al[s] - b);
+            for (int i = 0; i < n; i++) q[i] -= S[(size_t)s * n + i] * (al[s] - b); /* planted fault: the sign */
 #else
             for (int i = 0; i < n; i++) q[i] += S[(size_t)s * n + i] * (al[s] - b);
 #endif
@@ -285,7 +292,7 @@ static inline double mk_lbfgs(mk_fgfn fg, void *ctx, int n, double *x, mk_lbfgs_
         double s0 = 0;
         for (int i = 0; i < n; i++) d[i] = -q[i], s0 += d[i] * g[i];
         if (!(s0 < 0) || !used) { /* not a descent direction: drop the memory, go downhill; d = -g / |g|, a first step
-                                      min(1, |g|) as before, but |g|^2 does not overflow for |g| up to the largest double */
+                                      min(1, |g|), formed so |g|^2 does not overflow for |g| up to the largest double */
             used = 0, s0 = 0;
             double gs = 0;
             for (int i = 0; i < n; i++) gs += (g[i] / gmax) * (g[i] / gmax);
@@ -299,14 +306,17 @@ static inline double mk_lbfgs(mk_fgfn fg, void *ctx, int n, double *x, mk_lbfgs_
             status = -1;
             break;
         }
-        double sy = 0, ss = 0, yy = 0, sn = 0, sm = 0, ym = 0; /* the guard on s, y scaled by powers of two (exact), so ss yy can't underflow or overflow */
+        /* the guard on s, y scaled by powers of two (exact), so ss yy can't underflow or overflow */
+        double sy = 0, ss = 0, yy = 0, sn = 0, sm = 0, ym = 0;
         for (int i = 0; i < n; i++) sm = fmax(sm, fabs(xn[i] - x[i])), ym = fmax(ym, fabs(gn[i] - g[i]));
         int es = sm > 0 ? ilogb(sm) : 0, ey = ym > 0 ? ilogb(ym) : 0;
         for (int i = 0; i < n; i++) {
             double si = xn[i] - x[i], yi = gn[i] - g[i], a = ldexp(si, -es), b = ldexp(yi, -ey);
             sy += si * yi, sn += a * b, ss += a * a, yy += b * b;
         }
-        if (sn > 1e-12 * sqrt(ss * yy) && sy >= 0x1p-1022) { /* body-motion-support minimize.c's guard; a rejected pair leaves the kept ones alone */
+        /* keep the pair when the cosine of s and y is over 1e-12 and s.y >= DBL_MIN; a rejected pair leaves the kept
+           ones alone */
+        if (sn > 1e-12 * sqrt(ss * yy) && sy >= 0x1p-1022) {
             for (int i = 0; i < n; i++) S[(size_t)head * n + i] = xn[i] - x[i], Y[(size_t)head * n + i] = gn[i] - g[i];
             rho[head] = 1 / sy, head = (head + 1) % m, used = used < m ? used + 1 : m;
         }
@@ -333,18 +343,20 @@ typedef struct {
     double ftarget;  /* stop at f <= ftarget; 0 = no target (to stop at f = 0, give 0x1p-1074) */
     double xtol;     /* stop when sigma times the largest axis is under xtol, default 1e-12 */
     uint64_t seed;
-    const double *scale; /* per-coordinate scale (as glance-core's gaittrain.c), NULL = 1: the first covariance is diag(scale^2) */
+    const double *scale; /* per-coordinate scale, NULL = 1: the first covariance is diag(scale^2) */
     long evals;      /* out */
     int status;      /* out: 0 target, 1 xtol, 2 budget, -1 failure */
 } mk_cmaes_opts;
 
 /* CMA-ES, (mu/mu_w, lambda) with rank-one and rank-mu updates and cumulative step-size control (Hansen 2016, "The CMA
-   Evolution Strategy: A Tutorial", its default constants). n <= MK_CMA_MAX. x: start (the first mean) and the best found.
-   For a multimodal f, restart with a doubled lambda (IPOP) and keep the best. Returns f at x. */
+   Evolution Strategy: A Tutorial", its default constants). n <= MK_CMA_MAX. x: start (the first mean) and the best
+   found. For a multimodal f, restart with a doubled lambda (IPOP) and keep the best. Returns f at x, or NaN (status -1)
+   for a bad n, lambda 1 or no memory. o is required: NULL gives NaN. */
 #define MK_CMA_MAX 64
 static inline double mk_cmaes(mk_fn fn, void *ctx, int n, double *x, mk_cmaes_opts *o)
 {
-    if (n < 1 || n > MK_CMA_MAX || !o || o->lambda == 1) { if (o) o->status = -1, o->evals = 0; return NAN; } /* 1.6.0: lambda 1 has no parent (mu 0); 1.6.2: evals 0, not an earlier run's */
+    /* lambda 1 has no parent (mu 0); evals 0, not an earlier run's */
+    if (n < 1 || n > MK_CMA_MAX || !o || o->lambda == 1) { if (o) o->status = -1, o->evals = 0; return NAN; }
     int lam = o->lambda > 0 ? o->lambda : 4 + (int)floor(3 * log(n)), mu = lam / 2;
     long maxev = o->maxevals > 0 ? o->maxevals : 1000L * n * n;
     double ftarget = o->ftarget != 0 ? o->ftarget : -INFINITY, xtol = o->xtol > 0 ? o->xtol : 1e-12;
@@ -362,7 +374,7 @@ static inline double mk_cmaes(mk_fn fn, void *ctx, int n, double *x, mk_cmaes_op
     double cc = (4 + mueff / n) / (n + 4 + 2 * mueff / n), c1 = 2 / ((n + 1.3) * (n + 1.3) + mueff);
     double cmu = fmin(1 - c1, 2 * (mueff - 2 + 1 / mueff) / ((n + 2) * (n + 2) + mueff));
 #if defined(MK_MUTATE) && MK_MUTATE == 45
-    c1 = cmu = 0;
+    c1 = cmu = 0; /* planted fault: the covariance never learns */
 #endif
     double chin = sqrt(n) * (1 - 1.0 / (4 * n) + 1.0 / (21.0 * n * n)), sigma = o->sigma0 > 0 ? o->sigma0 : 0.3;
     for (int i = 0; i < n; i++) m[i] = x[i], ps[i] = pc[i] = 0, D[i] = 1;
@@ -388,7 +400,8 @@ static inline double mk_cmaes(mk_fn fn, void *ctx, int n, double *x, mk_cmaes_op
                 y[i] = s, t[i] = m[i] + sigma * s;
             }
             fk[k] = fn(t, ctx), ev++, idx[k] = k;
-            if (fk[k] < fbest || (isnan(fbest) && !isnan(fk[k]))) { fbest = fk[k]; for (int i = 0; i < n; i++) best[i] = t[i]; } /* a NaN start is replaced */
+            /* a NaN start is replaced */
+            if (fk[k] < fbest || (isnan(fbest) && !isnan(fk[k]))) { fbest = fk[k]; for (int i = 0; i < n; i++) best[i] = t[i]; }
         }
         for (int i = 1; i < lam; i++) /* rank by f, a NaN as the worst value */
             for (int j = i; j > 0 && (fk[idx[j]] < fk[idx[j - 1]] || (isnan(fk[idx[j - 1]]) && !isnan(fk[idx[j]]))); j--) { int s = idx[j]; idx[j] = idx[j - 1], idx[j - 1] = s; }

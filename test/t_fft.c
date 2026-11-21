@@ -1,3 +1,5 @@
+/* mk_fft.h: radix-2 1-D, 2-D and 3-D transforms and mk_fftm's any-length transform against a direct O(n^2) DFT;
+   Parseval, round trips, the real-input transform against the complex one, and refused sizes. */
 #include "../include/mk_fft.h"
 #include "t.h"
 #include <stdlib.h>
@@ -107,21 +109,19 @@ int main(void)
     for (int k = 0; k <= N / 2; k++) er = fmax(er, cabs(R[k] - full[k]));
     CHECK(er < 1e-12, "real-input transform, n 64: bins 0..32 match the complex transform (worst %.2g)", er);
     mk_fft_free(&p), mk_fft_free(&q), mk_fft_free(&pm), mk_fft_free(&half), free(x), free(y);
-    /* the verification work's finding 8 (2026-11-14): a size that is not a power of 2 is refused before the data is touched */
+    /* a size that is not a power of 2 is refused before the data is touched */
     double complex g3[48], g30[48];
     for (int i = 0; i < 48; i++) g3[i] = g30[i] = CMPLX(i % 5, 0);
     int r3 = mk_fft3_c(g3, 4, 4, 3, 0), ch = 0;
     for (int i = 0; i < 48; i++) ch += memcmp(&g3[i], &g30[i], sizeof g3[i]) != 0;
-    CHECK(r3 == -1 && ch == 0, "finding 8: mk_fft3_c(4, 4, 3) returns -1 with the data untouched (%d of 48 values changed)", ch);
-#ifndef T_OLD
-    { /* 1.0.1, the verification work 2026-11-14b: n above 2^29 would overflow mk_fft_ri's int doubling; refused before any allocation */
+    CHECK(r3 == -1 && ch == 0, "mk_fft3_c(4, 4, 3) returns -1 with the data untouched (%d of 48 values changed)", ch);
+    { /* n above 2^29 would overflow mk_fft_ri's int doubling: refused before any allocation */
         mk_fft big;
         CHECK(mk_fft_plan(&big, 1 << 30) == -1 && big.n == 0, "mk_fft_plan refuses n = 2^30");
         CHECK(mk_fft_plan(&big, 1 << 20) == 0, "mk_fft_plan still accepts n = 2^20");
         mk_fft_free(&big);
     }
-#endif
-    { /* 1.5.6: any length, mk_fftm, against the direct DFT both ways (lengths with 4, 2, 3, 5, 7 and the prime 97 in them) */
+    { /* mk_fftm at any length (factors 4, 2, 3, 5, 7 and the prime 97) against the direct DFT, both directions */
         static const int ns[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 15, 16, 25, 49, 60, 97, 180, 210, 288, 1080, 2160};
         enum { NN = sizeof ns / sizeof ns[0] };
         double worst[2] = {0, 0};

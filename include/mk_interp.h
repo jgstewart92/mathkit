@@ -1,9 +1,11 @@
-/* mathkit: 1-D interpolation on increasing nodes x[n]. Monotone cubic (PCHIP: Fritsch-Butland interior slopes, shape-
-   preserving three-point ends, as scipy's PchipInterpolator) computed exactly as aeromap/aeromap.c does, so its results
-   are bit-identical to that proved code, except where d0 * d1 underflows (aeromap.c gives a 0 slope there, 1.0.5 does
-   not); natural cubic spline (C2); linear. n 1 gives y0 and n < 1 NaN (mk_locate itself needs n >= 2). Queries outside
-   [x0, xn-1] are clamped to the end. The straight-line parts (mk_linear_eval, and n 2) are mk_vec.h's mk_lerp (1.6.0): the
-   last node's value exactly, and no overflow between values of opposite sign near DBL_MAX. Header only, C23. */
+/* mathkit: 1-D interpolation on increasing nodes x[n]: monotone cubic (PCHIP), natural cubic spline (C2) and linear.
+   PCHIP keeps monotone data monotone (Fritsch and Carlson 1980). Its interior slopes are the weighted harmonic mean of
+   the two neighbouring secants (Fritsch and Butland 1984), 0 where the secants differ in sign or one is 0; its ends use
+   the shape-preserving three-point formula. These are scipy's PchipInterpolator slopes. The sign test reads the
+   secants' signs, not d0 * d1, so tiny secants whose product underflows still get their slope. n 1 gives y0 and n < 1
+   NaN (mk_locate itself needs n >= 2). Queries outside [x0, xn-1] are clamped to the end. The straight-line parts
+   (mk_linear_eval, and n 2) use mk_vec.h's mk_lerp: the last node's value exactly, and no overflow between values of
+   opposite sign near DBL_MAX. Header only, C23. */
 #ifndef MK_INTERP_H
 #define MK_INTERP_H
 #include "mk_vec.h"
@@ -13,12 +15,12 @@
 static inline int mk_sign(double x) { return (x > 0) - (x < 0); }
 static inline double mk_pchip_interior(double d0, double d1, double h0, double h1)
 {
-    /* signs, since d0 * d1 underflows for tiny secants; a NaN secant still gives NaN, as aeromap.c */
+    /* by signs, since d0 * d1 underflows for tiny secants; a NaN secant gives NaN */
     if (mk_sign(d0) * mk_sign(d1) <= 0) return isnan(d0) || isnan(d1) ? NAN : 0;
     double w1 = 2 * h1 + h0, w2 = h1 + 2 * h0;
 #if defined(MK_MUTATE) && MK_MUTATE == 71
     (void)w1, (void)w2;
-    return 0.5 * (d0 + d1);
+    return 0.5 * (d0 + d1); /* planted fault: the arithmetic mean, which can overshoot */
 #else
     return (w1 + w2) / (w1 / d0 + w2 / d1);
 #endif
@@ -51,7 +53,7 @@ static inline void mk_pchip_slopes(const double *x, const double *y, int n, doub
     m[n - 1] = mk_pchip_end((y[n - 1] - y[n - 2]) / (x[n - 1] - x[n - 2]), (y[n - 2] - y[n - 3]) / (x[n - 2] - x[n - 3]),
                             x[n - 1] - x[n - 2], x[n - 2] - x[n - 3]);
 }
-/* cubic Hermite through (x, y) with slopes m; with n == 2 it is the straight line, as aeromap */
+/* cubic Hermite through (x, y) with slopes m; with n == 2 it is the straight line */
 static inline double mk_hermite_eval(const double *x, const double *y, const double *m, int n, double q)
 {
     if (n < 2) return n == 1 ? y[0] : NAN;
@@ -94,7 +96,7 @@ static inline int mk_spline_slopes(const double *x, const double *y, int n, doub
     M[n - 1] = 0;
     for (int i = n - 2; i >= 1; i--) M[i] = dp[i] - cp[i] * M[i + 1];
 #if defined(MK_MUTATE) && MK_MUTATE == 72
-    M[0] = M[1];
+    M[0] = M[1]; /* planted fault: not a natural end */
 #else
     M[0] = 0;
 #endif

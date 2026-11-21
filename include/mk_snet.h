@@ -1,21 +1,19 @@
-/* mathkit: surface nets on a labelled voxel grid (Gibson 1998, "Constrained elastic surface nets"; s-forms, 2026-11-15, with
-   the house's other copies merged in). One vertex in each dual cell (the cube between eight voxel centres) whose voxels do not
-   all carry one label, shared by every label's surface there, so two labels that touch share their interface's vertices
-   exactly (their triangles there are the same, wound oppositely). A vertex starts at the mean of the crossings on the cell's
-   label-changing edges: the edge midpoints for labels, or for a scalar field (mk_snet_build_iso) the linear crossing of iso,
-   held to [0.05, 0.95] of the edge (body-claude mesh.c: a sample exactly at iso would put the crossings of every edge round it
-   at one point, giving zero-length edges). Then it relaxes by Taubin's shrink-free pair (lambda 0.5, mu -0.53) toward its six
-   dual neighbours, held inside its own dual cell, which keeps the topology and the voxels' fidelity. A label's triangles: each
-   voxel face between it and another label, as the quad of the four dual vertices round it, split on its shorter diagonal,
-   wound anticlockwise seen from outside the label. No case table, nothing ambiguous.
-   Grid: lab[(k ny + j) nx + i], voxel (i, j, k) spanning org + h [i, i+1] x [j, j+1] x [k, k+1]; outside the grid is label 0.
-   For a scalar field phi at the voxel centres, label 1 is phi < iso (inside) and 0 the rest.
-   Memory goes with the surface, not the grid (as experiment/cfd wrap.c keeps two layers): each vertex keeps its dual cell's
-   index, ascending, and the faces are found through two rolling layers of the dual grid, so a 512^3 grid holding one ball
-   needs no 4-byte-per-cell table. Results equal s-forms' full-table version bit for bit.
-   Where a label's voxels in one dual cell (or the others) fall in two groups not joined by cube edges, its surface touches
-   itself there (a non-manifold vertex or edge); mk_snet_split counts such cells (experiment/cfd wrap.c's test). Header only,
-   C23. */
+/* mathkit: surface nets on a labelled voxel grid (Gibson 1998, "Constrained elastic surface nets"). One vertex in each
+   dual cell (the cube between eight voxel centres) whose voxels do not all carry one label, shared by every label's
+   surface there, so two labels that touch share their interface's vertices exactly (their triangles there are the same,
+   wound oppositely). A vertex starts at the mean of the crossings on the cell's label-changing edges: the edge
+   midpoints for labels, or for a scalar field (mk_snet_build_iso) the linear crossing of iso, held to [0.05, 0.95] of
+   the edge (a sample exactly at iso would otherwise put the crossings of every edge round it at one point, giving
+   zero-length edges). Then it relaxes by Taubin's shrink-free pair (Taubin 1995; lambda 0.5, mu -0.53) toward its six
+   dual neighbours, held inside its own dual cell, which keeps the topology and the voxels' fidelity. A label's
+   triangles: each voxel face between it and another label, as the quad of the four dual vertices round it, split on its
+   shorter diagonal, wound anticlockwise seen from outside the label. No case table, nothing ambiguous.
+   Grid: lab[(k ny + j) nx + i], voxel (i, j, k) spanning org + h [i, i+1] x [j, j+1] x [k, k+1]; outside the grid is
+   label 0. For a scalar field phi at the voxel centres, label 1 is phi < iso (inside) and 0 the rest.
+   Memory goes with the surface, not the grid: each vertex keeps its dual cell's index, ascending, and the faces are
+   found through two rolling layers of the dual grid, so a 512^3 grid holding one ball needs no 4-byte-per-cell table.
+   Where a label's voxels in one dual cell (or the others) fall in two groups not joined by cube edges, its surface
+   touches itself there (a non-manifold vertex or edge); mk_snet_split counts such cells. Header only, C23. */
 #ifndef MK_SNET_H
 #define MK_SNET_H
 #include <limits.h>
@@ -25,7 +23,8 @@
 #include <string.h>
 
 typedef struct {
-    int nx, ny, nz;  /* the voxel grid; dual cells are (nx + 1) (ny + 1) (nz + 1), dual cell (i, j, k) between voxels i-1..i */
+    /* the voxel grid; dual cells are (nx + 1) (ny + 1) (nz + 1), dual cell (i, j, k) between voxels i-1..i */
+    int nx, ny, nz;
     double org[3], h;
     double *V;       /* 3 nv coordinates */
     int nv;
@@ -93,7 +92,8 @@ static inline int mk_snet_build_(const uint8_t *lab, const float *phi, float iso
                 int L[8], mixed = 0;
                 for (int c = 0; c < 8; c++) L[c] = mk_snet_at_(lab, phi, iso, nx, ny, nz, i - 1 + (c & 1), j - 1 + ((c >> 1) & 1), k - 1 + ((c >> 2) & 1)), mixed |= L[c] != L[0];
                 if (!mixed) continue;
-                /* the mean of the crossings on the edges whose two voxels differ, in units of h from the cell's low voxel centre */
+                /* the mean of the crossings on the edges whose two voxels differ, in units of h from the cell's low
+                   voxel centre */
                 double p[3] = {0, 0, 0};
                 int ne = 0;
                 for (int c = 0; c < 8; c++)
@@ -105,10 +105,11 @@ static inline int mk_snet_build_(const uint8_t *lab, const float *phi, float iso
                         if (phi) {
                             const int ic = i - 1 + (c & 1), jc = j - 1 + ((c >> 1) & 1), kc = k - 1 + ((c >> 2) & 1);
                             const int id = ic + (ax == 0), jd = jc + (ax == 1), kd = kc + (ax == 2);
-                            if (ic >= 0 && jc >= 0 && kc >= 0 && id < nx && jd < ny && kd < nz) { /* both samples in the grid */
+                            /* both samples in the grid */
+                            if (ic >= 0 && jc >= 0 && kc >= 0 && id < nx && jd < ny && kd < nz) {
                                 const double fa = phi[((size_t)kc * ny + jc) * nx + ic], fb = phi[((size_t)kd * ny + jd) * nx + id];
 #if defined(MK_MUTATE) && MK_MUTATE == 124
-                                (void)fa, (void)fb;
+                                (void)fa, (void)fb; /* planted fault: midpoints for a field too */
 #else
                                 t = (iso - fa) / (fb - fa);
                                 t = t < 0.05 ? 0.05 : t > 0.95 ? 0.95 : t;
@@ -135,9 +136,9 @@ static inline int mk_snet_build_(const uint8_t *lab, const float *phi, float iso
             }
     }
     s->zs[dz] = (int)nv, s->nv = (int)nv;
-    /* relax (Taubin 1995: a step of lambda 0.5 toward the six dual neighbours' mean, then one of mu -0.53 away, so a convex part
-       does not shrink as under plain averaging), each vertex held inside its own dual cell; one relaxation is both steps. The
-       neighbours, +x -x +y -y +z -z, come from three rolling dual layers. */
+    /* relax (Taubin 1995: a step of lambda 0.5 toward the six dual neighbours' mean, then one of mu -0.53 away, so a
+       convex part does not shrink as under plain averaging), each vertex held inside its own dual cell; one relaxation
+       is both steps. The neighbours, +x -x +y -y +z -z, come from three rolling dual layers. */
     if (iters > 0 && nv) {
         nb = malloc(sizeof *nb * 6 * nv), W = malloc(sizeof *W * 3 * nv);
         if (!nb || !W) goto fail;
@@ -168,11 +169,11 @@ static inline int mk_snet_build_(const uint8_t *lab, const float *phi, float iso
                 }
                 const int64_t c = s->cell[v];
                 const int ci[3] = {(int)(c % dx), (int)(c / dx % dy), (int)(c / ((int64_t)dx * dy))};
-                (void)ci; /* unused under MK_MUTATE 121; not [[maybe_unused]], which clightgen refuses (the verification work N-B) */
+                (void)ci; /* unused under MK_MUTATE 121; not [[maybe_unused]], which CompCert's clightgen refuses */
                 for (int t = 0; t < 3; t++) {
                     const double x0 = s->V[3 * v + t];
                     double x = n ? x0 + f * (q[t] / n - x0) : x0;
-#if !defined(MK_MUTATE) || MK_MUTATE != 121
+#if !defined(MK_MUTATE) || MK_MUTATE != 121 /* planted fault 121: vertices free to leave their dual cells */
                     const double lo = org[t] + h * (ci[t] - 0.5), hi = lo + h; /* the dual cell */
                     x = x < lo ? lo : x > hi ? hi : x;
 #endif
@@ -188,8 +189,8 @@ fail:
     free(nb), free(W), free(L3), mk_snet_free(s);
     return -1;
 }
-/* the shared vertices of a labelled grid, relaxed `iters` times (0 leaves them at the crossing means). 0, or -1 for a bad
-   size, h or org, iters < 0, or no memory (*s is then empty). */
+/* the shared vertices of a labelled grid, relaxed `iters` times (0 leaves them at the crossing means). 0, or -1 for a
+   bad size, h or org, iters < 0, or no memory (*s is then empty). */
 static inline int mk_snet_build(const uint8_t *lab, int nx, int ny, int nz, const double org[3], double h, int iters, mk_snet *s)
 {
     if (!lab) { memset(s, 0, sizeof *s); return -1; }
@@ -223,7 +224,7 @@ static inline int mk_snet_faces_(const mk_snet *s, const uint8_t *lab, const flo
             for (int i = -1; i < nx; i++) {
                 const int l0 = mk_snet_at_(lab, phi, iso, nx, ny, nz, i, j, k);
 #if defined(MK_MUTATE) && MK_MUTATE == 123
-                for (int ax = 0; ax < 2; ax++) {
+                for (int ax = 0; ax < 2; ax++) { /* planted fault: no faces across z */
 #else
                 for (int ax = 0; ax < 3; ax++) {
 #endif
@@ -231,8 +232,9 @@ static inline int mk_snet_faces_(const mk_snet *s, const uint8_t *lab, const flo
                     if (i1 >= nx + 1 || j1 >= ny + 1 || k1 >= nz + 1) continue;
                     const int l1 = mk_snet_at_(lab, phi, iso, nx, ny, nz, i1, j1, k1);
                     if (l0 == l1 || (l0 != want && l1 != want)) continue;
-                    /* the face between voxel (i, j, k) and its +ax neighbour: the four dual cells round the edge joining their
-                       centres, which share the dual coordinate i1 (j1, k1) along ax and take both values in the other two axes */
+                    /* the face between voxel (i, j, k) and its +ax neighbour: the four dual cells round the edge
+                       joining their centres, which share the dual coordinate i1 (j1, k1) along ax and take both values
+                       in the other two axes */
                     const int u = (ax + 1) % 3, w = (ax + 2) % 3;
                     int q[4];
                     for (int c = 0; c < 4; c++) {
@@ -240,12 +242,13 @@ static inline int mk_snet_faces_(const mk_snet *s, const uint8_t *lab, const flo
                         d[ax] = (ax == 0 ? i1 : ax == 1 ? j1 : k1);
                         d[u] -= (c == 1 || c == 2) ? 0 : 1, d[w] -= (c >= 2) ? 0 : 1;
                         q[c] = (d[2] == k + 1 ? Lk1 : Lk)[(size_t)d[1] * dx + d[0]];
-                        if (q[c] < 0) { free(t), free(LL); return -1; } /* 1.6.1: not s's grid (1.6.0 read V[-3]) */
+                        if (q[c] < 0) { free(t), free(LL); return -1; } /* not the grid s was built from */
                     }
-                    /* q[0..3] go anticlockwise about +ax; outward from the label is +ax when l0 is the label, -ax otherwise */
+                    /* q[0..3] go anticlockwise about +ax; outward from the label is +ax when l0 is the label, -ax
+                       otherwise */
                     int out = l0 == want;
 #if defined(MK_MUTATE) && MK_MUTATE == 122
-                    out = !out;
+                    out = !out; /* planted fault: wound inward */
 #endif
                     if (!out) { const int x = q[1]; q[1] = q[3], q[3] = x; }
                     const double *A = s->V + 3 * (size_t)q[0], *B = s->V + 3 * (size_t)q[1], *C = s->V + 3 * (size_t)q[2], *D = s->V + 3 * (size_t)q[3];
@@ -268,9 +271,9 @@ static inline int mk_snet_faces_(const mk_snet *s, const uint8_t *lab, const flo
     *T = t;
     return (int)nt;
 }
-/* the triangles of label `want`'s boundary (indices into s->V), anticlockwise seen from outside the label. *T is allocated
-   (free it); the triangle count, or -1 for no memory, more than INT_MAX triangles, or a lab other than the grid s was built from
-   where a face needs a vertex s has not (1.6.1). */
+/* the triangles of label `want`'s boundary (indices into s->V), anticlockwise seen from outside the label. *T is
+   allocated (free it); the triangle count, or -1 for no memory, more than INT_MAX triangles, or a lab other than the
+   grid s was built from where a face needs a vertex s has not. */
 static inline int mk_snet_faces(const mk_snet *s, const uint8_t *lab, int want, int **T) { return mk_snet_faces_(s, lab, NULL, 0, want, T); }
 /* the inside's boundary (phi < iso) of a net from mk_snet_build_iso */
 static inline int mk_snet_faces_iso(const mk_snet *s, const float *phi, float iso, int **T) { return mk_snet_faces_(s, NULL, phi, iso, 1, T); }
@@ -302,15 +305,15 @@ static inline int mk_snet_split_(const mk_snet *s, const uint8_t *lab, const flo
         int a[8], b[8];
         for (int q = 0; q < 8; q++) a[q] = mk_snet_at_(lab, phi, iso, s->nx, s->ny, s->nz, i - 1 + (q & 1), j - 1 + ((q >> 1) & 1), k - 1 + ((q >> 2) & 1)) == want, b[q] = !a[q];
 #if defined(MK_MUTATE) && MK_MUTATE == 125
-        (void)b;
+        (void)b; /* planted fault: no cell counted */
 #else
         bad += mk_snet_split8_(a) || mk_snet_split8_(b);
 #endif
     }
     return bad;
 }
-/* the dual cells where label want's voxels, or the others, fall in two or more groups not joined by cube edges: where want's
-   surface touches itself. 0 means every vertex of want's surface has one disc of triangles round it. */
+/* the dual cells where label want's voxels, or the others, fall in two or more groups not joined by cube edges: where
+   want's surface touches itself. 0 means every vertex of want's surface has one disc of triangles round it. */
 static inline int mk_snet_split(const mk_snet *s, const uint8_t *lab, int want) { return mk_snet_split_(s, lab, NULL, 0, want); }
 static inline int mk_snet_split_iso(const mk_snet *s, const float *phi, float iso) { return mk_snet_split_(s, NULL, phi, iso, 1); }
 #endif

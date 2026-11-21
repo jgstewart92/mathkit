@@ -1,3 +1,6 @@
+/* mk_linalg.h: LU, Cholesky, least squares, the symmetric value problem and the tridiagonal solve on systems with known
+   answers (hand-solved 3x3s, a built Q diag Q^T, an exact line fit, a discrete Poisson problem), residuals in long
+   double, cases found by fuzzing (stored in test/data), size guards and non-finite input. */
 #include "../include/mk_linalg.h"
 #include <float.h>
 #include <limits.h>
@@ -15,7 +18,7 @@ static double resid(const double *A, int n, const double *x, const double *b)
     return r;
 }
 
-/* the verification work's lstsq inputs (findings/, 2026-11-14): "op m n", then A row-major and b, as hex floats */
+/* a least-squares case from test/data: "op m n", then A row-major and b, as hex floats */
 static int load_ls(const char *path, int *m, int *n, double **A, double **b)
 {
     FILE *f = fopen(path, "r");
@@ -144,12 +147,12 @@ int main(void)
         for (int i = 0; i < 3; i++) worst = fmax(worst, fabs(T3[i][0] * w3[k][0] + T3[i][1] * w3[k][1] + T3[i][2] * w3[k][2] - v3[k] * w3[k][i]));
     double hand = w3[2][0] * (w3[0][1] * w3[1][2] - w3[0][2] * w3[1][1]) + w3[2][1] * (w3[0][2] * w3[1][0] - w3[0][0] * w3[1][2]) + w3[2][2] * (w3[0][0] * w3[1][1] - w3[0][1] * w3[1][0]);
     CHECK(worst < 1e-13 && v3[0] <= v3[1] && v3[1] <= v3[2] && fabs(hand - 1) < 1e-13, "symmetric 3x3: A v = value v (%.2g), ascending, right-handed (%.15g)", worst, hand);
-    /* ---- the verification work's fuzz findings, 2026-11-14 (FINDINGS.md); each row failed on mathkit before 1.0.0 ---- */
+    /* ---- cases found by fuzzing: rank near the span, scaling, values near overflow, infinite entries ---- */
     double lr, lo, lx;
     ls_case("test/data/lstsq_keeps_dependent.txt", &lr, &lo, &lx);
-    CHECK(fabs(lr - lo) <= 1e-12 * lo && lx < 1e6, "finding 1: a column 2.3e-14 from the span is dropped (41 x 37): residual %.16g, x's own %.16g, max |x| %.2g", lr, lo, lx);
+    CHECK(fabs(lr - lo) <= 1e-12 * lo && lx < 1e6, "least squares: a column 2.3e-14 from the span is dropped (41 x 37): residual %.16g, x's own %.16g, max |x| %.2g", lr, lo, lx);
     ls_case("test/data/lstsq_drops_independent.txt", &lr, &lo, &lx);
-    CHECK(fabs(lr - lo) <= 1e-12 * lo && lr <= 2.9039116231485418 * (1 + 1e-12), "finding 1: a column 1.1e-5 from the span is kept (34 x 24): residual %.16g, x's own %.16g (minimum 2.9039116231485418)", lr, lo);
+    CHECK(fabs(lr - lo) <= 1e-12 * lo && lr <= 2.9039116231485418 * (1 + 1e-12), "least squares: a column 1.1e-5 from the span is kept (34 x 24): residual %.16g, x's own %.16g (minimum 2.9039116231485418)", lr, lo);
     double scs[10] = {1e150, 1e154, 1e155, 1e200, 1e300, 1e-150, 1e-160, 1e-170, 1e-200, 1e-300}, wsc = 0;
     for (int t = 0; t < 10; t++) {
         double a[16] = {0}, bb[4] = {1, 1, 1, 1}, xx[4];
@@ -158,15 +161,15 @@ int main(void)
         double r = mk_lstsq(a, 4, 4, bb, xx);
         wsc = fmax(wsc, fmax(fabs(xx[0] * scs[t] - 1), r == 0 ? 0 : 1));
     }
-    CHECK(wsc < 1e-15, "finding 2: diag(c, 1, 1, 1) x = 1 for c 1e-300 .. 1e300: x0 = 1/c and residual 0 (worst %.2g)", wsc);
+    CHECK(wsc < 1e-15, "least squares: diag(c, 1, 1, 1) x = 1 for c 1e-300 .. 1e300: x0 = 1/c and residual 0 (worst %.2g)", wsc);
     double jb[4] = {0, 1e155, 1e155, 0}, jv[4], jw[2];
     int jr = mk_sym_jacobi(jb, 2, jv, jw);
-    CHECK(jr >= 0 && fabs(jw[0] + 1e155) < 1e140 && fabs(jw[1] - 1e155) < 1e140, "finding 3: [[0, 1e155], [1e155, 0]] has values -1e155, 1e155 (got %g, %g, return %d)", jw[0], jw[1], jr);
+    CHECK(jr >= 0 && fabs(jw[0] + 1e155) < 1e140 && fabs(jw[1] - 1e155) < 1e140, "sym_jacobi: [[0, 1e155], [1e155, 0]] has values -1e155, 1e155 (got %g, %g, return %d)", jw[0], jw[1], jr);
     double js[4] = {0, 1e-170, 1e-170, 0};
     jr = mk_sym_jacobi(js, 2, jv, jw);
-    CHECK(jr >= 0 && fabs(jw[0] + 1e-170) < 1e-185 && fabs(jw[1] - 1e-170) < 1e-185, "finding 3: [[0, 1e-170], [1e-170, 0]] has values -1e-170, 1e-170 (got %g, %g)", jw[0], jw[1]);
+    CHECK(jr >= 0 && fabs(jw[0] + 1e-170) < 1e-185 && fabs(jw[1] - 1e-170) < 1e-185, "sym_jacobi: [[0, 1e-170], [1e-170, 0]] has values -1e-170, 1e-170 (got %g, %g)", jw[0], jw[1]);
     double ji[4] = {1, INFINITY, INFINITY, 1}, j3[3][3] = {{1, 0, 0}, {0, INFINITY, 0}, {0, 0, 1}}, v3i[3], w3i[3][3];
-    CHECK(mk_sym_jacobi(ji, 2, jv, jw) == -1 && mk_sym3(j3, v3i, w3i) == -1, "finding 3: an infinite entry is refused (-1) by mk_sym_jacobi and mk_sym3");
+    CHECK(mk_sym_jacobi(ji, 2, jv, jw) == -1 && mk_sym3(j3, v3i, w3i) == -1, "an infinite entry is refused (-1) by mk_sym_jacobi and mk_sym3");
     enum { DN = 200 };
     double *dg = calloc(DN * DN, sizeof(double));
     int dp[DN];
@@ -177,17 +180,17 @@ int main(void)
     for (int i = 0; i < DN; i++) dg[i * DN + i] = i < DN / 2 ? 1e-6 : 1e6;
     mk_lu(dg, DN, dp), det2 = mk_lu_det(dg, DN, dp);
     free(dg);
-    CHECK(fabs(det1 - 1) < 1e-12 && fabs(det2 - 1) < 1e-12, "finding 6: 100 pivots of 1e6 and 100 of 1e-6 give det 1 in either order (%.17g, %.17g)", det1, det2);
+    CHECK(fabs(det1 - 1) < 1e-12 && fabs(det2 - 1) < 1e-12, "LU determinant: 100 pivots of 1e6 and 100 of 1e-6 give det 1 in either order (%.17g, %.17g)", det1, det2);
     double ci[16] = {0};
     for (int i = 0; i < 4; i++) ci[i * 4 + i] = 1;
     ci[5] = INFINITY;
-    CHECK(mk_chol(ci, 4) == -1, "finding 7: an infinite diagonal is refused by Cholesky");
-    /* contract notes, landed with 1.0.0 */
+    CHECK(mk_chol(ci, 4) == -1, "an infinite diagonal is refused by Cholesky");
+    /* documented contracts: non-finite A refused, subnormal pivots accepted with the non-finite answer reported */
     double na[16] = {0}, nb2[4] = {1, 1, 1, 1}, nx[4], ia[16] = {0}, ib[4] = {1, 1, 1, 1};
     for (int i = 0; i < 4; i++) na[i * 4 + i] = ia[i * 4 + i] = 1;
     na[0] = NAN, ia[6] = INFINITY;
     double rn1 = mk_lstsq(na, 4, 4, nb2, nx), rn2 = mk_lstsq(ia, 4, 4, ib, nx);
-    CHECK(rn1 == -1 && rn2 == -1, "contract: mk_lstsq refuses NaN or Inf in A with -1 (got %g, %g)", rn1, rn2);
+    CHECK(rn1 == -1 && rn2 == -1, "mk_lstsq refuses NaN or Inf in A with -1 (got %g, %g)", rn1, rn2);
     double ta[4] = {1e-310, 0, 0, 1e-310}, tb[2] = {1, 1};
     int tp[2];
     int tl = mk_lu(ta, 2, tp), ts = tl ? 0 : mk_lu_solve(ta, 2, tp, tb);
@@ -197,8 +200,8 @@ int main(void)
     int gs = mk_lu_solve(ga, 2, gp, gb);
     double ca[4] = {1e-310, 0, 0, 1e-310}, cb[2] = {1, 1};
     int cl = mk_chol(ca, 2), cs = cl ? 0 : mk_chol_solve(ca, 2, cb);
-    CHECK(tl == 0 && ts == -1 && gs == 0 && cl == 0 && cs == -1, "contract: 1e-310 I passes LU's relative test, and the solves report the non-finite answer (lu_solve %d, chol_solve %d; a normal solve %d)", ts, cs, gs);
-    { /* 1.0.1, the verification work 2026-11-14b: subnormal symmetric matrices converge (power-of-two prescale), and bad sizes are refused */
+    CHECK(tl == 0 && ts == -1 && gs == 0 && cl == 0 && cs == -1, "1e-310 I passes LU's relative test, and the solves report the non-finite answer (lu_solve %d, chol_solve %d; a normal solve %d)", ts, cs, gs);
+    { /* subnormal symmetric matrices converge (power-of-two prescale), and bad sizes are refused */
         double s = 2.1e-313, A[9] = {0, s, 0, s, 0, s, 0, s, 0}, V[9], w[3];
         int sw = mk_sym_jacobi(A, 3, V, w);
         double e = sqrt(2.0) * s;
@@ -213,23 +216,18 @@ int main(void)
         int pv[1];
         CHECK(mk_lu(one, -1, pv) == -1, "mk_lu refuses n = -1");
         CHECK(mk_sym_jacobi(one, -1, vv, ww) == -1, "mk_sym_jacobi refuses n = -1");
-#ifndef T_OLD
         CHECK(mk_lu(one, 46341, pv) == -1, "mk_lu refuses n = 46341 (n * n would overflow an int) before reading a");
         CHECK(mk_sym_jacobi(one, 46341, vv, ww) == -1, "mk_sym_jacobi refuses n = 46341 before reading a");
-#endif
     }
-    { /* 1.0.2: the verification work's size findings (Results 70, 73) */
+    { /* size guards: negative n, and n * n or m * n past INT_MAX */
         double one[1] = {4}, b1[1] = {1}, x1[1];
         CHECK(mk_chol(one, -1) == -1, "mk_chol refuses n = -1");
         CHECK(mk_chol_solve(one, -1, b1) == -1, "mk_chol_solve refuses n = -1");
-#ifndef T_OLD
         CHECK(mk_chol(one, 46341) == -1, "mk_chol refuses n = 46341 before reading a");
         CHECK(mk_lstsq(one, INT_MAX / 2 + 1, 2, b1, x1) == -1, "mk_lstsq refuses m * n past INT_MAX before reading a");
-#endif
         (void)x1;
     }
-#ifndef T_OLD
-    { /* 1.0.5: the tridiagonal solve metal asked for (world.c, roadline.c) */
+    { /* mk_tridiag: an analytic solution, backward error on random systems, a plain elimination's bits, the refusals */
         enum { N9 = 9, NR = 1000 };
         double ta[N9], tb[N9], tc[N9], td[N9], te = 0;
         for (int i = 0; i < N9; i++) ta[i] = tc[i] = -1, tb[i] = 2, td[i] = 1;
@@ -254,7 +252,7 @@ int main(void)
             }
         }
         CHECK(rr == 0 && bw < 4 * DBL_EPSILON, "tridiag, 20 random diagonally dominant systems of 1000: residual %.2g of the row's terms (under 4 eps)", bw);
-        /* metal's elimination, world.c 2026-10-23 lines 621-628, names as there: mk_tridiag must give its bits */
+        /* the Thomas algorithm without pivoting, written out: mk_tridiag must give its bits */
         long tdiff = 0, ttot = 0;
         for (int rep = 0; rep < 200; rep++) {
             int n = 1 + rep % 40;
@@ -273,7 +271,7 @@ int main(void)
             else for (int i = 0; i < n; i++) tdiff += memcmp(&x[i], &x2[i], sizeof x[i]) != 0;
             ttot += n;
         }
-        CHECK(tdiff == 0, "tridiag equals metal's world.c elimination bit for bit: %ld of %ld values differ", tdiff, ttot);
+        CHECK(tdiff == 0, "tridiag equals a plain Thomas elimination bit for bit: %ld of %ld values differ", tdiff, ttot);
         double za[2] = {0, 1}, zb[2] = {1, 1}, zc[2] = {1, 0}, zd[2] = {1, 2};
         double pa[2] = {0, 1}, pb[2] = {1e-17, 1}, pc[2] = {1, 0}, pd[2] = {1, 2};
         double na[2] = {0, 1}, nb[2] = {4, 4}, nc[2] = {1, 0}, nd[2] = {1, NAN};
@@ -284,6 +282,5 @@ int main(void)
               "tridiag refuses a zero pivot (%d), a pivot 1e-17 of its row that needs pivoting (%d), a NaN right side (%d), n 0 (%d); n 1 gives 2 / 4 (%d)",
               z1, z2, z3, z4, z5);
     }
-#endif
     return wrong;
 }

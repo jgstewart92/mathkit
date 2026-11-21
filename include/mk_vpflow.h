@@ -1,18 +1,18 @@
-/* mathkit: a volume-preserving deformation, the flow of an exactly divergence-free field (b-helper, 2026-11-15). The field is
-   u = curl A, A's three components uniform cubic B-splines on a regular grid (control points at the nodes), so div u = 0 at
-   every point, not only on the grid: the flow keeps every volume up to the RK4 step and the polygon of a moved surface. The
-   coordinates are any (x0, x1, x2) whose volume element is constant: Cartesian, or (angle, r^2 / 2, length) about an axis,
-   whose volume element is d(angle) d(r^2 / 2) ds. Any axis may be periodic (an angle); on the others, nodes past the grid
-   count as 0, so the field fades out C2-smoothly over two cells and is 0 beyond. The time stepper is mk_ode.h's mk_rk4_step.
-   Header only, C23.
+/* mathkit: a volume-preserving deformation, the flow of an exactly divergence-free field. The field is u = curl A, A's
+   three components uniform cubic B-splines on a regular grid (control points at the nodes), so div u = 0 at every
+   point, not only on the grid: the flow keeps every volume, up to the RK4 step's error and, for a moved surface, its
+   polygon's. The coordinates are any (x0, x1, x2) whose volume element is constant: Cartesian, or (angle, r^2 / 2,
+   length) about an axis, whose volume element is d(angle) d(r^2 / 2) ds. Any axis may be periodic (an angle); on the
+   others, nodes past the grid count as 0, so the field fades out C2-smoothly over two cells and is 0 beyond. The time
+   stepper is mk_ode.h's mk_rk4_step. Header only, C23.
 
-   mk_vp: n[3] nodes, origin o[3] (node 0's coordinate), step h[3], per[3] (1: periodic, period n h), a[3] the components at
-   the nodes, index (k n1 + j) n0 + i (NULL: a zero component). A grid is refused (NaN out) unless every n >= 1, every h is
-   finite and > 0, every o finite, and n0 n1 n2 doubles fit in memory's address range.
+   mk_vp: n[3] nodes, origin o[3] (node 0's coordinate), step h[3], per[3] (1: periodic, period n h), a[3] the
+   components at the nodes, index (k n1 + j) n0 + i (NULL: a zero component). A grid is refused (NaN out) unless every
+   n >= 1, every h is finite and > 0, every o finite, and n0 n1 n2 doubles fit in memory's address range.
    mk_vp_eval(P, x, A, J): A(x) and its Jacobian J[c][d] = dA_c / dx_d. mk_vp_vel(P, x, u): u = curl A.
    mk_vp_div(P, x, eps): div u by central differences of width eps (a check: 0 up to rounding and eps^2).
-   mk_vp_advect(P, X, n, T, steps): each of n points (3 doubles each) carried for time T in `steps` RK4 steps; the largest
-   move, or NaN (no point moved) for a refused grid, steps < 1 or T not finite.
+   mk_vp_advect(P, X, n, T, steps): each of n points (3 doubles each) carried for time T in `steps` RK4 steps; the
+   largest move, or NaN (no point moved) for a refused grid, steps < 1 or T not finite.
    mk_vp_jacdet(P, x, T, steps, eps): the map's Jacobian determinant at x, central differences of width eps. */
 #ifndef MK_VPFLOW_H
 #define MK_VPFLOW_H
@@ -61,11 +61,14 @@ static inline void mk_vp_eval(const mk_vp *P, const double *x, double A[3], doub
     double w[3][4], dw[3][4];
     for (int ax = 0; ax < 3; ax++) {
         double g = (x[ax] - P->o[ax]) / P->h[ax];
-        if (P->n[ax] < 1 || P->n[ax] > INT_MAX - 4 || !isfinite(g)) goto bad; /* a NaN or infinite x, o or h, a zero h, a bad axis */
+        /* a NaN or infinite x, o or h, a zero h, a bad axis */
+        if (P->n[ax] < 1 || P->n[ax] > INT_MAX - 4 || !isfinite(g)) goto bad;
         if (P->per[ax]) {
             if (fabs(g) > 0x1p30) g = fmod(g, P->n[ax]); /* whole periods out first, so the node index fits an int */
-        } else if (g < -3 || g > P->n[ax] + 2) { /* two cells past the grid every node is missing: zero, unless x is not finite */
-            if (!isfinite(x[0] + x[1] + x[2])) goto bad; /* one test, so the function stays small enough to inline */
+        } else if (g < -3 || g > P->n[ax] + 2) {
+            /* two cells past the grid every node is missing: zero, unless x is not finite; one test, so the function
+               stays small enough to inline */
+            if (!isfinite(x[0] + x[1] + x[2])) goto bad;
             return;
         }
         const double f = floor(g);
@@ -102,7 +105,7 @@ static inline void mk_vp_vel(const mk_vp *P, const double *x, double u[3])
     mk_vp_eval(P, x, A, J);
     u[0] = J[2][1] - J[1][2], u[1] = J[0][2] - J[2][0], u[2] = J[1][0] - J[0][1];
 #if defined(MK_MUTATE) && MK_MUTATE == 131
-    u[0] = J[2][1] + J[1][2]; /* not a curl, so not divergence-free */
+    u[0] = J[2][1] + J[1][2]; /* planted fault: not a curl, so not divergence-free */
 #endif
 }
 static inline double mk_vp_div(const mk_vp *P, const double *x, double eps)
@@ -127,7 +130,7 @@ static inline double mk_vp_advect(const mk_vp *P, double *X, size_t n, double T,
         const double x0[3] = {x[0], x[1], x[2]};
         for (int s = 0; s < steps; s++) {
 #if defined(MK_MUTATE) && MK_MUTATE == 132
-            double u[3]; /* forward Euler, first order */
+            double u[3]; /* planted fault: forward Euler, first order */
             mk_vp_vel(P, x, u);
             for (int d = 0; d < 3; d++) x[d] += dt * u[d];
             (void)work;

@@ -1,4 +1,6 @@
-/* test meshes (test-only, independent of the headers): an icosphere, a subdivided box, a torus, appended into one mesh; OBJ out */
+/* Test meshes, independent of the headers: an icosphere, a subdivided box and a torus, each appended to a tm_mesh
+   (V: 3 doubles a vertex, T: 3 indices a face, grown with realloc; tm_free frees both). tm_volume is the signed volume
+   (positive for an outward closed mesh). tm_write writes an OBJ file into tm_dir; with tm_dir NULL it does nothing. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +18,7 @@ typedef struct { double *V; int *T; int nv, nt; } tm_mesh;
     m->T = realloc(m->T, sizeof(int) * 3 * (size_t)(m->nt + 1));
     m->T[3 * m->nt] = a, m->T[3 * m->nt + 1] = b, m->T[3 * m->nt + 2] = c, m->nt++;
 }
-/* an icosphere of radius R about c, S subdivisions, outward, appended to m */
+/* an icosphere of radius R about c, S subdivisions (20 * 4^S faces), outward, appended to m */
 [[maybe_unused]] static void tm_sphere(tm_mesh *m, double R, const double *c, int S)
 {
     const double t = (1 + sqrt(5.0)) / 2;
@@ -85,7 +87,7 @@ typedef struct { double *V; int *T; int nv, nt; } tm_mesh;
             }
     free(id);
 }
-/* a torus about z: tube radius r at radius R, nu x nw, outward */
+/* a torus about z: tube radius r at radius R, nu x nw quads of two faces, outward, appended to m */
 [[maybe_unused]] static void tm_torus(tm_mesh *m, double R, double r, int nu, int nw)
 {
     const int base = m->nv;

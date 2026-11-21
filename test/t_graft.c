@@ -1,9 +1,10 @@
-/* mk_mtet and the graft (mesher-fable's bonegraft): marching tetrahedra on a sphere's and a torus's distance grids (closed, outward,
-   the volume), then a dent carved into a unit icosphere inside a 45-degree cap: the field from mk_sdf_mesh, the patch thinned with
-   mk_decimate in between as bonegraft's two steps, stitched back; the result closed with S's own triangles kept outside the cap,
-   the dent's volume, nothing inside the carved ball. 1.5.2: the patch stitched unthinned (on that S and a coarse one), a hole in
-   the patch by the seam refused, the kept piece of most volume either sign (S inward with a speck outward; a large inward piece
-   beside an outward body: 2). With a folder argument the results are written there for meshcheck. */
+/* mk_mtet and the graft: marching tetrahedra on a sphere's and a torus's distance grids (closed, outward, the volume
+   against 4/3 pi and 2 pi^2 R r^2), then a dent carved into a unit icosphere S inside a 45-degree cap: the field from
+   mk_sdf_mesh, the patch thinned with mk_decimate between patch and stitch, stitched back; the result closed with S's
+   own triangles kept outside the cap, its volume against S's less the analytic lens of the carved ball, nothing inside
+   that ball. Then the patch stitched unthinned (on that S and a coarse one), mk_graft_refine, a hole in the patch by
+   the seam refused, and the kept piece of most volume either sign (S inward with a speck outward; a large inward piece
+   beside an outward body: 2). With a folder argument the results are written there for test/check.sh's meshcheck. */
 #include "../include/mk_dec.h"
 #include "../include/mk_graft.h"
 #include "../include/mk_sdf.h"
@@ -35,7 +36,8 @@ static int closed(const double *V, int nv, const int *T, int nt, int *chi)
     free(e), free(used);
     return ok;
 }
-static const double CAP = 0.7853981633974483, BALL = 0.3; /* the cap: 45 degrees about +z; the dent: a ball of 0.3 at the pole */
+/* the cap: 45 degrees about +z, psi < 0 inside it; the dent: a ball of radius 0.3 about the pole */
+static const double CAP = 0.7853981633974483, BALL = 0.3;
 static double psi(const double *p, void *ctx)
 {
     (void)ctx;
@@ -98,7 +100,7 @@ int main(int argc, char **argv)
     const int rp = ri ? -1 : mk_graft_patch(&G, g.d, g.n, g.lo, g.h, &P);
     CHECK(r == 0 && ri == 0 && rp == 0 && P.nt > 1000, "the patch: mk_sdf_mesh's grid at h 0.02 carved, its surface by marching tetrahedra kept in the cap: %d vertices, %d triangles", rp ? -1 : P.nv,
           rp ? -1 : P.nt);
-    /* bonegraft's step between: the patch thinned as an open surface, its rim moving only along itself */
+    /* between patch and stitch: the patch thinned as an open surface, its rim moving only along itself */
     mk_dec_opts o;
     mk_dec_defaults(&o, 1);
     o.dist = 0.2 * h, o.maxedge = 0.1, o.minalt = 1e-4 * h;
@@ -131,7 +133,7 @@ int main(int argc, char **argv)
             bad1 += !f, own++;
         }
     }
-    for (int t = 0; ok && t < S.nt; t++) { /* every S triangle wholly outside the seam's reach is in the result, as it was */
+    for (int t = 0; ok && t < S.nt; t++) { /* each S triangle beyond the seam's reach is in the result as it was */
         int out = 1;
         for (int k = 0; k < 3; k++) out &= psi(S.V + 3 * S.T[3 * t + k], NULL) > 0.05;
         if (!out) continue;
@@ -146,8 +148,9 @@ int main(int argc, char **argv)
     CHECK(ok && bad1 == 0 && own > 0 && kept > 10000, "S's own vertices (%ld) are S's, digit for digit; %ld of its triangles away from the seam kept as they were", own, kept);
     CHECK(ok && inball == 0, "nothing of the result inside the carved ball (%ld vertices)", inball);
     tm_write("graft", O.V, O.nv, O.T, O.nt, NULL);
-    { /* 1.5.2: the patch stitched as it comes, not thinned: its dense rim wiggles back on S's edges (1.5.0: dup 2-5, lone 12-30, rc 1,
-         the maintainer's tibialis anterior r 14-20 dup); on this S and on a coarse one (3 subdivisions, edges about 6 h), as a muscle's */
+    { /* the patch stitched as it comes, not thinned: its dense rim wiggles back on S's edges, so some rim vertices come
+         out of order and must be merged; closed, one piece, the expected volume, on this S and on a coarse one
+         (3 subdivisions, edges about 6 h) */
         mk_gmesh O2 = {0};
         mk_graft_report r2 = {0}, r3 = {0};
         const int s2 = mk_graft_stitch(&G, P.V, P.nv, P.T, P.nt, 2.5 * h, &O2, &r2);
@@ -175,7 +178,8 @@ int main(int argc, char **argv)
         CHECK(k2 && c2 == 2 && r2.pieces == 1 && r2.merged > 0 && fabs(r2.vol1 / vexp - 1) < 3e-3 && k3 && c3 == 2 && r3.pieces == 1 && r3.merged > 0 && fabs(r3.vol1 / v3 - 1) < 1e-2,
               "the patch not thinned (%d and %d triangles): closed, Euler %d and %d, rc %d and %d, dup %ld and %ld, lone %ld and %ld; %ld and %ld rim vertices out of order merged; volume %.3f %% and %.3f %% off; crossing pairs by the seam %ld and %ld (not judged: thinning lays them flat)",
               P.nt, P3.nt, c2, c3, s2, s3, r2.dup, r3.dup, r2.lone, r3.lone, r2.merged, r3.merged, 100 * (r2.vol1 / vexp - 1), 100 * (r3.vol1 / v3 - 1), x2, x3);
-        { /* mk_graft_refine: the coarse S refined where the seam cuts it (edges to 2 h within 2 h of it), then grafted as before */
+        { /* mk_graft_refine: the coarse S refined where the seam cuts it (edges to 2 h within 2 h of it), then grafted
+             as before */
             mk_gmesh R4 = {0}, P4 = {0}, O4 = {0};
             mk_graft G4;
             mk_graft_report r4 = {0};
@@ -188,7 +192,7 @@ int main(int argc, char **argv)
                     const double *a = R4.V + 3 * R4.T[3 * t + k], *b = R4.V + 3 * R4.T[3 * t + (k + 1) % 3], pa = psi(a, NULL), pb = psi(b, NULL);
                     left += sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])) > 2 * h && fmin(pa, pb) < 2 * h && fmax(pa, pb) > -2 * h;
                 }
-            for (int t = 0; kr && t < S3.nt; t++) { /* S's triangles wholly beyond the band: in the result, the same corners in the same order */
+            for (int t = 0; kr && t < S3.nt; t++) { /* S's triangles beyond the band: kept, the same corners in order */
                 double lo = INFINITY, hi = -INFINITY;
                 for (int k = 0; k < 3; k++) lo = fmin(lo, psi(S3.V + 3 * S3.T[3 * t + k], NULL)), hi = fmax(hi, psi(S3.V + 3 * S3.T[3 * t + k], NULL));
                 if (lo < 2 * h && hi > -2 * h) continue;
@@ -209,7 +213,7 @@ int main(int argc, char **argv)
             if (!i4) mk_graft_free(&G4);
             mk_gmesh_free(&R4), mk_gmesh_free(&P4), mk_gmesh_free(&O4);
         }
-        /* a hole in the patch by the seam: one triangle away from its rim, every corner within 1.2 h of the seam, taken out */
+        /* a hole in the patch by the seam: one triangle off its rim, its corners within 1.2 h of the seam, taken out */
         int hole = -1;
         for (int t = 0; t < P.nt && hole < 0; t++) {
             int near = 1;
@@ -223,9 +227,9 @@ int main(int argc, char **argv)
         mk_graft_report rh = {0};
         const int sh = hole < 0 ? -9 : mk_graft_stitch(&G, P.V, P.nv, Th, nh, 2.5 * h, &Oh, &rh);
         CHECK(hole >= 0 && sh != 0 && rh.loops_s == 1 && rh.loops_p == 2 && rh.unpaired == 1,
-              "a patch with a one-triangle hole by the seam: not passed (rc %d), rim loops S %d, patch %d, one without a partner (%d): 1.5.0 said nothing more than -1 from its 64-step walk round this S, and on the maintainer's supraspinatus r (S 3 rim loops, the patch 5) 0 with a speck", sh, rh.loops_s, rh.loops_p, rh.unpaired);
-        /* the piece kept: S wound inward (a cavity's shell) with its patch, and a small closed speck wound outward beside them; and a large
-           closed piece wound inward beside an outward body */
+              "a patch with a one-triangle hole by the seam: not passed (rc %d), rim loops S %d, patch %d, one without a partner (%d)", sh, rh.loops_s, rh.loops_p, rh.unpaired);
+        /* the piece kept: S wound inward (a cavity's shell) with its patch, and a small closed speck wound outward
+           beside them; and a large closed piece wound inward beside an outward body */
         int *Tr = malloc(sizeof(int) * 3 * (size_t)S.nt);
         for (int t = 0; t < S.nt; t++) Tr[3 * t] = S.T[3 * t], Tr[3 * t + 1] = S.T[3 * t + 2], Tr[3 * t + 2] = S.T[3 * t + 1];
         float *Fn = malloc(sizeof(float) * N);
@@ -248,10 +252,12 @@ int main(int argc, char **argv)
         }
         const int ki = si == 0 && closed(Oi.V, Oi.nv, Oi.T, Oi.nt, &ci);
         CHECK(ki && ci == 2 && ri.pieces == 2 && ri.inverted == 1 && fabs(ri.vol1 / -vexp - 1) < 3e-3,
-              "S wound inward with its patch, a speck wound outward beside: the body kept (volume %.5f, Euler %d, rc %d), not the speck; %d pieces, %d wound against S (1.5.0 kept the speck)", ri.vol1, ci,
+              "S wound inward with its patch, a speck wound outward beside: the body kept (volume %.5f, Euler %d, rc %d), not the speck; %d pieces, %d wound against S", ri.vol1, ci,
               si, ri.pieces, ri.inverted);
-        /* beside the outward body, a closed piece wound inward: radius 1.5 (kept: of most volume), 0.5 (dropped, 12 % of the body's
-           volume), 0.05 (dropped, 0.01 %: the specks of rounding a clean stitch leaves are of that order) */
+        /* beside the outward body, a closed piece wound inward: radius 1.5 (kept: of most volume), 0.5 (dropped, 12 %
+           of the body's volume), 0.05 (dropped, 0.01 %: the specks of rounding a clean stitch leaves are of that
+           order). The stitch returns 2 when the kept piece is wound against S or such pieces hold over 1 % of its
+           volume, so 2, 2 and 0 */
         const double rad[3] = {1.5, 0.5, 0.05};
         int sb[3];
         mk_graft_report rq[3];
@@ -268,7 +274,7 @@ int main(int argc, char **argv)
         }
         CHECK(sb[0] == 2 && rq[0].vol1 < 0 && fabs(rq[0].dropped_vol / gr.vol1 - 1) < 1e-9 && sb[1] == 2 && fabs(rq[1].vol1 / gr.vol1 - 1) < 1e-9 && rq[1].inverted_vol < -0.01 * rq[1].vol1 &&
                   sb[2] == 0 && fabs(rq[2].vol1 / gr.vol1 - 1) < 1e-9 && rq[2].inverted == 1 && rq[2].inverted_vol < 0 && rq[2].inverted_vol > -1e-3 * rq[2].vol1,
-              "a closed piece wound inward beside the body, radius 1.5, 0.5, 0.05: rc %d, %d, %d (2: kept %.3f, or dropped %.4f against S over 1 %% of the body; the speck, %.2g, reported only); %d, %d, %d inverted (1.5.0: 0, silently)",
+              "a closed piece wound inward beside the body, radius 1.5, 0.5, 0.05: rc %d, %d, %d (2: kept %.3f, or dropped %.4f against S over 1 %% of the body; the speck, %.2g, reported only); %d, %d, %d inverted",
               sb[0], sb[1], sb[2], rq[0].vol1, rq[1].inverted_vol, rq[2].inverted_vol, rq[0].inverted, rq[1].inverted, rq[2].inverted);
         tm_free(&sp), free(Tr), free(Fn), free(Th), mk_gmesh_free(&Pi), mk_gmesh_free(&Oi), mk_gmesh_free(&Ob), mk_gmesh_free(&Oh);
         if (!ii) mk_graft_free(&Gi);

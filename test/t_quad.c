@@ -1,3 +1,6 @@
+/* mk_quad.h: Gauss-Legendre and Gauss-Kronrod rules exact on monomials to their degree and not past it, the tabulated
+   5-point nodes and weights, adaptive integration of singular and oscillating integrands against their closed forms,
+   triangle and tetrahedron rules against a! b! / (a + b + 2)! and a! b! c! / (a + b + c + 3)!, and the size guards. */
 #include <stdlib.h>
 static long t_mallocs; /* allocations the header asked for */
 static void *t_malloc(size_t s) { t_mallocs++; return malloc(s); }
@@ -87,8 +90,9 @@ int main(void)
                 }
     }
     CHECK(qbad == 0 && qsharp, "tetrahedron rules of degree 1, 2, 3: exact for x^a y^b z^c to their degree, not past it (%d misses)", qbad);
-    { /* 1.0.5: the verification work's quad finding Q-A (Result 79) and the size guards its proofs asked for */
-        static const double qa[6][4] = { /* p, q, s, reltol: s exp(-p (x - q)^2) + 1 on [-1, 1], from a search on 1.0.4 */
+    { /* status 0 means the error estimate meets the limit; sizes that would overflow an int are refused */
+        /* p, q, s, reltol: s exp(-p (x - q)^2) + 1 on [-1, 1]; narrow spikes found by a search */
+        static const double qa[6][4] = {
             {0x1.1308842f326f9p+15, -0x1.839c35f9524cap-1, 0x1.04725e871e93p+27, 0x1.6849b86a12b9bp-47},
             {0x1.88b8f7e7806fdp+18, 0x1.9f8456d11faa8p-2, 0x1.9886d8d403ba3p+22, 0x1.5fd7fe1796495p-37},
             {0x1.74b00cc38f519p+14, -0x1.7c15b4abda456p-1, 0x1.3614f2e9ace36p+23, 0x1.19799812dea11p-40},
@@ -103,21 +107,19 @@ int main(void)
             double I = mk_quad_adapt(spike, (void *)qa[r], -1, 1, 0, qa[r][3], 2000, &e, &st);
             if (st == 0 && e > qa[r][3] * fabs(I) * (1 + 1e-12)) qbadst++, worst = fmax(worst, e / (qa[r][3] * fabs(I)));
         }
-        CHECK(qbadst == 0, "Q-A: status 0 means the error meets the limit: %d of 6 spikes say 0 above it (worst %.3g x the limit)", qbadst, worst);
+        CHECK(qbadst == 0, "status 0 means the error meets the limit: %d of 6 spikes say 0 above it (worst %.3g x the limit)", qbadst, worst);
         long m0 = t_mallocs;
         double e2 = 0;
         int st2 = 9;
         spike_calls = 0;
-        static const double flat[3] = {1, 0, 0}; /* f = 1: 1.0.4 allocates and finishes in one pass */
+        static const double flat[3] = {1, 0, 0}; /* f = 1 converges in one pass: the refusal comes first */
         double I2 = mk_quad_adapt(spike, (void *)flat, -1, 1, 0, 1e-10, 1 << 29, &e2, &st2);
         CHECK(st2 == -1 && isnan(I2) && isnan(e2) && spike_calls == 0 && t_mallocs == m0,
               "mk_quad_adapt refuses maxint 2^29 (4 i + 3 past INT_MAX) before allocating or calling f: status %d, %ld calls, %ld allocations",
               st2, spike_calls, t_mallocs - m0);
-#ifndef T_OLD
         double gx[1], gw[1];
         CHECK(mk_gauss_legendre((1 << 30) + 1, gx, gw) == -1 && mk_gauss_legendre(INT_MAX, gx, gw) == -1,
               "mk_gauss_legendre refuses n = 2^30 + 1 and INT_MAX (2 k - 1 and (n + 1) / 2 past an int) before writing x or w");
-#endif
     }
     return wrong;
 }

@@ -1,9 +1,11 @@
-/* mk_decimate (mesher-fable's folddec): a sphere and a torus decimated within their distance bound (each input vertex near the result
-   and the result near the input, judged here by brute force), closed with Euler unchanged; a hollow ball whose two walls lie closer
-   than the edges grow (no crossing pair, judged by brute force); a bumpy sphere's fold lengths; held vertices; a target; an open
-   cap's rim; refusals. With a folder argument the results are written there for meshcheck. */
-/* every block the header allocates carries guard bytes on both sides, checked when it is freed (test-only): a write outside a block
-   is a FAIL row here, where it would otherwise corrupt the heap and abort without a row (planted fault 201) */
+/* mk_decimate: a sphere and a torus decimated within their distance bound (each input vertex near the result and the
+   result near the input, judged here by brute force), closed with the Euler characteristic unchanged; a hollow ball
+   whose two walls lie closer than the edges grow (no crossing pair, judged by brute force); a bumpy sphere's fold
+   lengths; held vertices; a target; an open cap's rim; refusals. With a folder argument the results are written there
+   for test/check.sh's meshcheck. */
+/* every block the header allocates carries guard bytes on both sides, checked when it is freed (test-only): a write
+   outside a block is a FAIL row here, where it would otherwise corrupt the heap and abort without a row (planted fault
+   201, which leaves a needle's tip with no owner and writes before the owner table) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,8 +112,8 @@ static double tri2(const double *p, const double *a, const double *b, const doub
     }
     return best;
 }
-/* the largest distance of the input's vertices from the result, and of points on the result (corners, edge midpoints, centres) from
-   the input, brute force */
+/* the largest distance of the input's vertices from the result, and of points on the result (corners, edge midpoints,
+   centres) from the input, brute force */
 static void drift(const double *V, int nv, const int *T, int nt, const int *To, int nto, double *in2out, double *out2in)
 {
     double a = 0, b = 0;
@@ -234,7 +236,7 @@ int main(int argc, char **argv)
               S.nv, r.nv, chi, r.refused[0]);
         free(al), free(To), tm_free(&S);
     }
-    { /* a hollow ball: an outer sphere and an inner one wound inward, 0.03 apart, so chords of the outer reach the inner */
+    { /* a hollow ball: an outer sphere and an inner one wound inward, 0.03 apart, so outer chords reach the inner */
         tm_mesh S = {0};
         tm_sphere(&S, 1, c0, 4);
         const int n1 = S.nv, t1 = S.nt;
@@ -313,9 +315,10 @@ int main(int argc, char **argv)
               r.rim1, offrim, a, b);
         free(map), free(al), free(To), tm_free(&S), tm_free(&C);
     }
-    { /* 1.5.2: a needle ear on an open grid's rim (its only triangle (w, v, u), u 1e-4 from v), every grid vertex held, a bound
-         and the clean-up on: only the relaxed try of u onto v can take the needle, and no new triangle is left to own u (1.5.0
-         wrote before its owner table there: heap-buffer-overflow at mk_dec.h:524 under ASan, the maintainer's race-c1 H3 patch) */
+    { /* a needle ear on an open grid's rim (its only triangle (w, v, u), u 1e-4 from v), every grid vertex held, a
+         bound and the clean-up on: only the relaxed try of u onto v can take the needle, and no new triangle is left to
+         own u, so the nearest remaining face of v's must own it (with none, the owner index is -1 and the write lands
+         before the owner table) */
         tm_mesh G = {0};
         const int n = 6;
         for (int j = 0; j <= n; j++)
@@ -335,7 +338,7 @@ int main(int argc, char **argv)
         long lost = 0;
         for (int i = 0; i < G.nv; i++) lost += i != u && !al[i];
         CHECK(e == 0 && !al[u] && lost == 0 && nto == G.nt - 1 && r.clean_after == 1 && r.left_after == 0 && r.relaxed == 1 && r.maxown < 2e-5,
-              "a needle ear on an open grid, every other vertex held: taken by the relaxed clean-up (%ld, %ld relaxed, %ld left), %d -> %d faces; its tip owned by v's nearest face, %.2g off (1.5.0: none, infinite)",
+              "a needle ear on an open grid, every other vertex held: taken by the relaxed clean-up (%ld, %ld relaxed, %ld left), %d -> %d faces; its tip owned by v's nearest face, %.2g off",
               r.clean_after, r.relaxed, r.left_after, G.nt, nto, r.maxown);
         free(keep), free(al), free(To), tm_free(&G);
     }
@@ -365,9 +368,9 @@ int main(int argc, char **argv)
         CHECK(n == k && e == 0 && r.nv == 4, "refusals: %d of %d (sizes, an index out of range, a repeated corner, no output, a bound negative or NaN, fold 180, turn 2, regions without a function or past 8, target -1, a NaN or 1e300 coordinate); a tetrahedron stays (%d vertices)",
               n, k, r.nv);
     }
-    { /* 1.6.0, the review's D1: the neighbour list taken right after a link test still holds the edge's two common vertices, which
-         mk_dec_cheap_ stamps MARKS + 1. 1.5.6's MARKS++ in mk_dec_nbrs_ read them as seen: after every collapse they went unrated and
-         about half of all neighbour lists came up short (claims/c_d1.c). Here on an octahedron, through the internals. */
+    { /* the neighbour list taken right after a link test still holds the edge's two common vertices, which
+         mk_dec_cheap_ stamps MARKS + 1: mk_dec_nbrs_ must not read them as seen (else they go unrated after every
+         collapse, and about half of all neighbour lists come up short). On an octahedron, through the internals. */
         const double OV[18] = {1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1};
         int OF[24] = {0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5}, nb[MK_DEC_MAXN];
         mk_dec_ c = {0};
@@ -377,7 +380,7 @@ int main(int argc, char **argv)
         for (int t = 0; t < 8; t++)
             for (int k = 0; k < 3; k++) mk_dec_fan_add_(&c, OF[3 * t + k], t);
         const int ok = !c.oom && mk_dec_cheap_(&c, 0, 4), n = mk_dec_nbrs_(&c, 4, nb);
-        CHECK(ok && n == 4, "D1 (review): an octahedron's edge passes the link test (%d), and its end's next neighbour list holds all %d of 4", ok, n);
+        CHECK(ok && n == 4, "an octahedron's edge passes the link test (%d), and its end's next neighbour list holds all %d of 4", ok, n);
         for (int i = 0; i < 6; i++) t_gd_free(c.VT[i]);
         t_gd_free(c.VT), t_gd_free(c.NVT), t_gd_free(c.CVT), t_gd_free(c.MARK), t_gd_free(c.deadv), t_gd_free(c.bnd), t_gd_free(c.N0);
     }

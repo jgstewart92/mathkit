@@ -1,14 +1,15 @@
-/* mathkit: small dense linear algebra, row-major double a[i * n + j]. LU with partial pivoting, Cholesky, Householder least
-   squares that survives rank deficiency, symmetric decomposition by Jacobi rotations (values ascending, vectors in columns),
-   a tridiagonal (Thomas) solve and 3x3 fast paths. Every solver returns -1 rather than divide by a vanishing or NaN
-   pivot. Header only, C23. */
+/* mathkit: small dense linear algebra, row-major double a[i * n + j]. LU with partial pivoting, Cholesky, Householder
+   least squares that survives rank deficiency, symmetric decomposition by Jacobi rotations (values ascending, vectors
+   in columns), a tridiagonal (Thomas) solve and 3x3 fast paths. Every solver returns -1 rather than divide by a
+   vanishing or NaN pivot. Header only, C23. */
 #ifndef MK_LINALG_H
 #define MK_LINALG_H
 #include <limits.h>
 #include <math.h>
 #include <string.h>
 
-/* LU in place with row pivots piv[n]. -1 when a pivot is below 1e-13 of the largest entry, or NaN. */
+/* LU in place (L's unit diagonal not stored) with row pivots piv[n]. -1 when a pivot is below 1e-13 of the largest
+   entry, or NaN, or n is outside 0..46340. */
 static inline int mk_lu(double *a, int n, int *piv)
 {
     if (n < 0 || n > 46340) return -1; /* n * n must fit an int, and a negative n has no matrix */
@@ -16,7 +17,7 @@ static inline int mk_lu(double *a, int n, int *piv)
     for (int i = 0; i < n * n; i++) scale = fmax(scale, fabs(a[i]));
     for (int k = 0; k < n; k++) {
         int p = k;
-#if !(defined(MK_MUTATE) && MK_MUTATE == 21)
+#if !(defined(MK_MUTATE) && MK_MUTATE == 21) /* planted fault 21: no pivot search */
         for (int i = k + 1; i < n; i++)
             if (fabs(a[i * n + k]) > fabs(a[p * n + k])) p = i;
 #endif
@@ -31,8 +32,9 @@ static inline int mk_lu(double *a, int n, int *piv)
     }
     return 0;
 }
-/* 0, or -1 if the answer is not finite: LU's refusal is relative to the largest entry by design, so a well-conditioned but
-   tiny matrix (1e-310 I) passes it and the answer can overflow; the solve reports that rather than returning it quietly */
+/* 0, or -1 if the answer is not finite: LU's refusal is relative to the largest entry by design, so a well-conditioned
+   but tiny matrix (1e-310 I) passes it and the answer can overflow; the solve reports that rather than returning it
+   quietly */
 static inline int mk_lu_solve(const double *lu, int n, const int *piv, double *b)
 {
     for (int k = 0; k < n; k++)
@@ -63,7 +65,7 @@ static inline int mk_chol(double *a, int n)
         double d = a[j * n + j];
         for (int k = 0; k < j; k++) d -= a[j * n + k] * a[j * n + k];
         if (!(d > 0) || isinf(d)) return -1; /* NaN, not positive, or an infinite diagonal */
-#if !(defined(MK_MUTATE) && MK_MUTATE == 22)
+#if !(defined(MK_MUTATE) && MK_MUTATE == 22) /* planted fault 22: no square root */
         d = sqrt(d);
 #endif
         a[j * n + j] = d;
@@ -92,9 +94,10 @@ static inline int mk_chol_solve(const double *l, int n, double *b)
     return ok ? 0 : -1;
 }
 
-/* Least squares min |a x - b|, a m x n (m >= n, n <= MK_LSTSQ_MAX), Householder QR with column scaling and pivoting. a and b are
-   destroyed. A column whose pivot falls below 1e-10 of its scaled norm is dropped and its unknown set to 0, so a
-   rank-deficient system still solves. Returns the residual norm, or -1 for a size out of range or a NaN or infinite entry in a. */
+/* Least squares min |a x - b|, a m x n (m >= n, n <= MK_LSTSQ_MAX), Householder QR with column scaling and pivoting. a
+   and b are destroyed. A column whose pivot falls below 1e-10 of its scaled norm is dropped and its unknown set to 0,
+   so a rank-deficient system still solves. Returns the residual norm, or -1 for a size out of range or a NaN or
+   infinite entry in a. */
 #define MK_LSTSQ_MAX 64
 static inline double mk_lstsq(double *a, int m, int n, double *b, double *x)
 {
@@ -103,7 +106,8 @@ static inline double mk_lstsq(double *a, int m, int n, double *b, double *x)
         if (!isfinite(a[i])) return -1;
     double colmax[MK_LSTSQ_MAX], colnorm[MK_LSTSQ_MAX], diag[MK_LSTSQ_MAX];
     int perm[MK_LSTSQ_MAX], rk = 0;
-    for (int j = 0; j < n; j++) { /* the column's norm scaled by its largest entry, so neither overflows nor underflows */
+    /* the column's norm scaled by its largest entry, so neither overflows nor underflows */
+    for (int j = 0; j < n; j++) {
         double mx = 0, s = 0;
         for (int i = 0; i < m; i++) mx = fmax(mx, fabs(a[i * n + j]));
         if (!(mx > 0 && isfinite(mx))) mx = 1;
@@ -153,7 +157,7 @@ static inline double mk_lstsq(double *a, int m, int n, double *b, double *x)
     double r = 0;
     for (int i = rk; i < m; i++) r += b[i] * b[i];
     (void)colmax, (void)colnorm;
-#if !(defined(MK_MUTATE) && MK_MUTATE == 23)
+#if !(defined(MK_MUTATE) && MK_MUTATE == 23) /* planted fault 23: the column scaling not undone */
     for (int j = 0; j < n; j++) x[j] = x[j] / colnorm[j] / colmax[j];
 #endif
     return sqrt(r);
@@ -193,7 +197,7 @@ static inline int mk_sym_jacobi(double *a, int n, double *vectors, double *value
                 double theta = (a[q * n + q] - a[p * n + p]) / (2 * apq);
                 double t = (theta >= 0 ? 1 : -1) / (fabs(theta) + sqrt(theta * theta + 1));
 #if defined(MK_MUTATE) && MK_MUTATE == 24
-                t = -t;
+                t = -t; /* planted fault: the rotation's sign */
 #endif
                 double c = 1 / sqrt(t * t + 1), s = t * c;
                 for (int k = 0; k < n; k++) {
@@ -219,16 +223,15 @@ static inline int mk_sym_jacobi(double *a, int n, double *vectors, double *value
     return done ? sweep : -1;
 }
 
-/* Tridiagonal solve (Thomas): a[i] x[i-1] + b[i] x[i] + c[i] x[i+1] = d[i] for i = 0..n-1 (a[0] and c[n-1] are not read).
-   No pivoting, in metal's elimination order (world.c, roadline.c: their answers stay bit-identical), so b and d are
-   overwritten (b with the pivots) and x may be d. 0, or -1 for n < 1, a pivot that is NaN, zero or under 2^-52 of its
-   row's |a| + |b| + |c| (singular to rounding, or the system needs pivoting: use mk_lu), or an answer that is not
-   finite. Diagonally dominant systems, as heat columns give, need no pivoting. */
+/* Tridiagonal solve (Thomas): a[i] x[i-1] + b[i] x[i] + c[i] x[i+1] = d[i] for i = 0..n-1 (a[0] and c[n-1] are not
+   read). No pivoting; b and d are overwritten (b with the pivots) and x may be d. 0, or -1 for n < 1, a pivot that is
+   NaN, zero or under 2^-52 of its row's |a| + |b| + |c| (singular to rounding, or the system needs pivoting: use
+   mk_lu), or an answer that is not finite. Diagonally dominant systems, as heat columns give, need no pivoting. */
 static inline int mk_tridiag(int n, const double *a, double *b, const double *c, double *d, double *x)
 {
     if (n < 1) return -1;
 #if defined(MK_MUTATE) && MK_MUTATE == 27
-#define MK_TRIDIAG_SMALL_(p, row) (!((p) != 0) || !isfinite(row)) /* only an exact zero refused */
+#define MK_TRIDIAG_SMALL_(p, row) (!((p) != 0) || !isfinite(row)) /* planted fault: only an exact zero refused */
 #else
 #define MK_TRIDIAG_SMALL_(p, row) (!(fabs(p) > 0x1p-52 * (row)))
 #endif
@@ -236,7 +239,7 @@ static inline int mk_tridiag(int n, const double *a, double *b, const double *c,
     for (int i = 1; i < n; i++) {
         double row = fabs(a[i]) + fabs(b[i]) + (i + 1 < n ? fabs(c[i]) : 0), f = a[i] / b[i - 1];
 #if defined(MK_MUTATE) && MK_MUTATE == 26
-        d[i] -= f * d[i - 1]; /* the pivot left as b[i] */
+        d[i] -= f * d[i - 1]; /* planted fault: the pivot left as b[i] */
 #else
         b[i] -= f * c[i - 1], d[i] -= f * d[i - 1];
 #endif
@@ -252,15 +255,16 @@ static inline int mk_tridiag(int n, const double *a, double *b, const double *c,
     return ok ? 0 : -1;
 }
 
-/* 3x3: Gaussian elimination with partial pivoting; 0, or -1 for a zero pivot or a non-finite answer. A pivot small from rounding is
-   not refused (mk_lu's 1e-13 rule is): [[1 2 3] [4 5 6] [7 8 9]] gives 0 with x near 9e15 for b (1, 0, 0) (MEASURED 1.6.1). */
+/* 3x3: Gaussian elimination with partial pivoting; 0, or -1 for a zero pivot or a non-finite answer. A pivot small from
+   rounding is not refused (mk_lu's 1e-13 rule is): [[1 2 3] [4 5 6] [7 8 9]] gives 0 with x near 9e15 for
+   b (1, 0, 0). */
 static inline int mk_solve3(const double A[3][3], const double b[3], double x[3])
 {
     double m[3][4];
     for (int r = 0; r < 3; r++) { for (int c = 0; c < 3; c++) m[r][c] = A[r][c]; m[r][3] = b[r]; }
     for (int c = 0; c < 3; c++) {
         int p = c;
-#if !(defined(MK_MUTATE) && MK_MUTATE == 25)
+#if !(defined(MK_MUTATE) && MK_MUTATE == 25) /* planted fault 25: no pivot search */
         for (int r = c + 1; r < 3; r++) if (fabs(m[r][c]) > fabs(m[p][c])) p = r;
 #endif
         if (!(fabs(m[p][c]) > 0)) return -1;

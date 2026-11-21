@@ -1,13 +1,16 @@
-/* mathkit: geometry on triangle meshes, double precision. Closest point on a triangle (Ericson's region method), watertight
-   ray-triangle intersection (Woop, Benthin and Wald 2013: no ray slips between two triangles sharing an edge while the ray's sheared frame resolves
-   them, the verification work F11), boxes, and a
-   triangle bounding-volume tree (binned SAH build) with first-hit, any-hit, hit-count, nearest-point and point-in-mesh
-   queries; the generalized winding number for a cross-check. Meshes are flat arrays: V[3 v + k], T[3 t + j]. Ties go to the
-   lowest triangle index, so results do not depend on the tree. Crossings (1.5.2): an edge strictly through a triangle
-   (meshcheck's test, mk_seg_tri_strict), two faces crossing (mk_tri_cross), and a mesh's crossing face pairs through the tree,
-   all or those of marked faces (mk_bvh_crossings). Batches of points (mk_bvh_nearest_many, mk_bvh_inside_many,
-   mk_winding_number_many) run on OpenMP threads when the caller builds with -fopenmp, each answer the single call's. Header
-   only, C23. */
+/* mathkit: geometry on triangle meshes, double precision. Header only, C23.
+   - Closest point on a triangle (mk_closest_pt_tri; Ericson, Real-Time Collision Detection, 2005, Voronoi regions).
+   - Watertight ray-triangle intersection (mk_ray_tri; Woop, Benthin and Wald 2013): no ray slips between two triangles
+     that share an edge, wherever the ray's sheared frame resolves them.
+   - Axis-aligned boxes, and a triangle bounding-volume tree (binned SAH build) with first-hit, any-hit, hit-count, box,
+     nearest-point and point-in-mesh queries; the generalized winding number as a cross-check.
+   - Crossings: an edge strictly through a triangle (mk_seg_tri_strict), two faces crossing (mk_tri_cross), and a mesh's
+     crossing face pairs found through the tree, all of them or those of marked faces (mk_bvh_crossings).
+   - Batches of points (mk_bvh_nearest_many, mk_bvh_inside_many, mk_winding_number_many) run on OpenMP threads when the
+     caller builds with -fopenmp; each answer equals the single call's, bit for bit.
+   Meshes are flat arrays: vertex v is V[3 v + k], triangle t's corners are T[3 t + j]. Ties go to the lowest triangle
+   index, so results do not depend on the tree's layout. Queries only read the tree, so threads may share one. Stable:
+   calls and results do not change between releases. */
 #ifndef MK_GEOM_H
 #define MK_GEOM_H
 #include "mk_par.h"
@@ -15,12 +18,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* the closest point's edge candidates for mk_closest_pt_tri: on a sliver, a repeated corner or a weight below 0 or NaN, each
-   edge's own closest point replaces q when nearer (exact arithmetic would never prefer them; rounding there may). A candidate
-   with a negative or NaN weight is dropped. Kept out of line: it is rare, and inlined it took mk_closest_pt_tri past gcc's inline
-   limit, which cost mk_sdf_mesh 30 to 47 % at -O3 (1.3.0, MEASURED). */
+/* Edge fallback for mk_closest_pt_tri on a sliver, a repeated corner, or a weight below 0 or NaN: each edge's closest
+   point replaces q when nearer (in exact arithmetic it never is; after rounding it may be). A q with a negative or NaN
+   weight is dropped, so the nearest edge point wins. Kept out of line because it is rare: inlined, it pushes
+   mk_closest_pt_tri past gcc's inline limit, which slowed mk_sdf_mesh by 30 to 47 % at -O3 on an x86-64 desktop. */
 #if defined(__GNUC__)
-#define MK_COLD_ __attribute__((noinline, cold)) /* GNU syntax, not a C23 [[...]] attribute (the verification work N-B) */
+#define MK_COLD_ __attribute__((noinline, cold)) /* GNU syntax, not a C23 [[...]] attribute */
 #else
 #define MK_COLD_
 #endif
@@ -42,7 +45,8 @@ MK_COLD_ static double mk_closest_edges_(const double *p, const double *a, const
     }
     return d;
 }
-/* the closest point q on triangle abc to p, its barycentric weights w (q = w0 a + w1 b + w2 c); the squared distance */
+/* The closest point q on triangle abc to p and its barycentric weights w (q = w0 a + w1 b + w2 c). Returns the squared
+   distance. Slivers and repeated corners fall back to the edges. */
 static inline double mk_closest_pt_tri(const double *p, const double *a, const double *b, const double *c, double *w, double *q)
 {
     double ab[3], ac[3], ap[3], bp[3], cp[3];
@@ -65,17 +69,18 @@ static inline double mk_closest_pt_tri(const double *p, const double *a, const d
     else { double den = 1 / (va + vb + vc), v = vb * den, ww = vc * den; w[0] = 1 - v - ww, w[1] = v, w[2] = ww, face = 1; }
     double d = 0;
     for (int k = 0; k < 3; k++) q[k] = w[0] * a[k] + w[1] * b[k] + w[2] * c[k], d += (q[k] - p[k]) * (q[k] - p[k]);
-    if (face) { /* an edge or face region: the edges too, only on a sliver (va + vb + vc is |ab x ac|^2, here under
-                   2^-20 |ab|^2 |ac|^2), a repeated corner or a weight below 0 or NaN (1.3.0: elsewhere the edges never win
-                   but by an ulp) */
+    if (face) { /* an edge or face region: try the edges too, but only on a sliver (va + vb + vc is |ab x ac|^2, here
+                   under 2^-20 |ab|^2 |ac|^2), a repeated corner, or a weight below 0 or NaN; elsewhere the edges win by
+                   an ulp at most */
         const double lab = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2], lac = ac[0] * ac[0] + ac[1] * ac[1] + ac[2] * ac[2];
         if (!(w[0] >= 0 && w[1] >= 0 && w[2] >= 0) || !(va + vb + vc > 0x1p-20 * lab * lac)) d = mk_closest_edges_(p, a, b, c, d, w, q);
     }
     return d;
 }
 
-/* a ray prepared for the watertight test: the axis of largest direction becomes z, then a shear. A zero d gives NaN shears, and
-   then no query hits anything (MEASURED for first_hit, any_hit and count_hits, 1.6.0). */
+/* A ray o + t d prepared for the watertight test: the axis of the largest direction component becomes z, then a shear.
+   d need not be unit length. A zero d gives NaN shears, and then first-hit, any-hit and hit-count queries find
+   nothing. */
 typedef struct { double o[3], d[3], inv[3], Sx, Sy, Sz; int kx, ky, kz; } mk_ray;
 static inline mk_ray mk_ray_make(const double *o, const double *d)
 {
@@ -87,14 +92,16 @@ static inline mk_ray mk_ray_make(const double *o, const double *d)
     r.kx = kx, r.ky = ky, r.kz = kz, r.Sx = d[kx] / d[kz], r.Sy = d[ky] / d[kz], r.Sz = 1 / d[kz];
     return r;
 }
-/* a * b - c * d with relative error at most 2u (Kahan): its sign and its zero are exact */
+/* a * b - c * d with relative error at most 2u (Kahan's method with fma; u the unit roundoff): its sign and its zero
+   are exact */
 static inline double mk_dop_(double a, double b, double c, double d)
 {
     double w = c * d, e = fma(-c, d, w), f = fma(a, b, -w);
     return f + e;
 }
-/* mk_ray_tri, and with out its facing (1.5.3): 1 where the ray leaves through the face (runs along (b - a) x (c - a)), -1 where
-   it enters. The sheared frame keeps orientation, and there det = U + V + W is minus that normal's component along the ray. */
+/* mk_ray_tri, and with out not NULL the hit's facing: 1 where the ray leaves through the face (runs along (b - a) x
+   (c - a)), -1 where it enters. The sheared frame keeps orientation, and there det = U + V + W is minus that normal's
+   component along the ray. */
 static inline int mk_ray_tri_s_(const mk_ray *r, const double *a, const double *b, const double *c, double tmin, double tmax, double *t, double *bary, int *out)
 {
     double A[3], B[3], C[3];
@@ -115,13 +122,14 @@ static inline int mk_ray_tri_s_(const mk_ray *r, const double *a, const double *
     *t = tt;
     if (bary) bary[0] = U / det, bary[1] = V / det, bary[2] = W / det;
 #if defined(MK_MUTATE) && MK_MUTATE == 214
-    if (out) *out = det > 0 ? 1 : -1; /* 214: the facing turned */
+    if (out) *out = det > 0 ? 1 : -1; /* 214: the facing reversed */
 #else
     if (out) *out = det < 0 ? 1 : -1;
 #endif
     return 1;
 }
-/* hit of r with triangle abc at a parameter in (tmin, tmax): 1 and *t, bary[3] (weights of a, b, c); both faces count */
+/* Hit of r with triangle abc at a parameter t in (tmin, tmax): returns 1 with *t and bary[3] (weights of a, b, c; bary
+   may be NULL), else 0. Both faces count. */
 static inline int mk_ray_tri(const mk_ray *r, const double *a, const double *b, const double *c, double tmin, double tmax, double *t, double *bary)
 {
     return mk_ray_tri_s_(r, a, b, c, tmin, tmax, t, bary, NULL);
@@ -146,14 +154,17 @@ static inline double mk_aabb_dist2(const mk_aabb *b, const double *p)
     }
     return d;
 }
-/* the slab test; *tenter the entry parameter. The box is padded by a few ulps of its and the ray origin's coordinates, so a hit on its face is not lost. */
+/* Slab test of r against box b over [tmin, tmax]: 1 if they meet, with *tenter the entry parameter. The box is padded
+   by 1e-12 times the largest magnitude among its coordinates, the ray origin's and 1, so a hit on a face is not lost to
+   rounding. */
 static inline int mk_aabb_ray(const mk_aabb *b, const mk_ray *r, double tmin, double tmax, double *tenter)
 {
     double t0 = tmin, t1 = tmax, m = 1;
 #if defined(MK_MUTATE) && MK_MUTATE == 235
-    for (int k = 0; k < 3; k++) m = fmax(m, fmax(fabs(b->lo[k]), fabs(b->hi[k]))); /* 235: the box's own coordinates only (1.5.3) */
+    for (int k = 0; k < 3; k++) m = fmax(m, fmax(fabs(b->lo[k]), fabs(b->hi[k]))); /* 235: the box alone sets the pad */
 #else
-    for (int k = 0; k < 3; k++) m = fmax(m, fmax(fmax(fabs(b->lo[k]), fabs(b->hi[k])), fabs(r->o[k]))); /* the ray origin too: (lo - o) rounds on its scale (the verification work H19 G1) */
+    /* the ray origin counts too: (lo - o) rounds on its scale */
+    for (int k = 0; k < 3; k++) m = fmax(m, fmax(fmax(fabs(b->lo[k]), fabs(b->hi[k])), fabs(r->o[k])));
 #endif
     for (int k = 0; k < 3; k++) {
         double pad = 1e-12 * m;
@@ -164,7 +175,8 @@ static inline int mk_aabb_ray(const mk_aabb *b, const mk_ray *r, double tmin, do
     return t0 <= t1;
 }
 
-typedef struct { mk_aabb box; int first, count; } mk_bvh_node; /* count > 0: a leaf of tri[first .. first+count); else children first, first+1 */
+/* a tree node: with count > 0 a leaf of tri[first .. first+count), else an inner node with children first, first + 1 */
+typedef struct { mk_aabb box; int first, count; } mk_bvh_node;
 typedef struct { const double *V; const int *T; int nt, nnode; int *tri; mk_bvh_node *node; } mk_bvh;
 
 static inline void mk_tri_box_(const double *V, const int *T, int t, mk_aabb *b)
@@ -216,7 +228,7 @@ static inline int mk_bvh_split_(mk_bvh *B, const double *cen, int node, int firs
         }
         if (bs < 0) ext = 0;
         else {
-            if (best >= count * mk_aabb_area(&nd->box) && count <= 16) return 0; /* splitting costs more than testing all */
+            if (best >= count * mk_aabb_area(&nd->box) && count <= 16) return 0; /* a split costs more than a leaf */
             int i = first, j = first + count - 1;
             while (i <= j) {
                 int t = B->tri[i];
@@ -239,9 +251,10 @@ static inline int mk_bvh_split_(mk_bvh *B, const double *cen, int node, int firs
 static inline void mk_bvh_free(mk_bvh *B)
 {
     free(B->tri), free(B->node);
-    B->tri = NULL, B->node = NULL, B->nnode = 0, B->nt = 0; /* 1.6.1: nt too, so a query after a failed build or a free finds no tree */
+    B->tri = NULL, B->node = NULL, B->nnode = 0, B->nt = 0; /* nt too: later queries see no tree */
 }
-/* the tree keeps pointers to V and T, which must outlive it. 0 or -1. */
+/* Builds the tree over nt triangles. It keeps pointers to V and T, which must outlive it; free it with mk_bvh_free.
+   Returns 0, or -1 (nt out of range, or out of memory) with an empty tree that queries treat as no mesh. */
 static inline int mk_bvh_build(mk_bvh *B, const double *V, const int *T, int nt)
 {
     B->V = V, B->T = T, B->nt = nt, B->nnode = 1, B->tri = NULL, B->node = NULL;
@@ -262,7 +275,8 @@ static inline int mk_bvh_build(mk_bvh *B, const double *V, const int *T, int nt)
 #define MK_BVH_STACK 256
 static inline const double *mk_bvh_v_(const mk_bvh *B, int t, int j) { return B->V + 3 * (size_t)B->T[3 * (size_t)t + j]; }
 
-/* the nearest hit in (tmin, tmax): its triangle (or -1), *t, bary */
+/* The nearest hit of the ray o + t d with t in (tmin, tmax): returns its triangle, or -1 if none, with *t and bary (may
+   be NULL) */
 static inline int mk_bvh_first_hit(const mk_bvh *B, const double *o, const double *d, double tmin, double tmax, double *t, double *bary)
 {
     mk_ray r = mk_ray_make(o, d);
@@ -296,7 +310,7 @@ static inline int mk_bvh_first_hit(const mk_bvh *B, const double *o, const doubl
     if (best >= 0) { *t = bt; if (bary) bary[0] = bb[0], bary[1] = bb[1], bary[2] = bb[2]; }
     return best;
 }
-/* is anything hit in (tmin, tmax)? (shadow rays) */
+/* 1 if the ray o + t d hits anything with t in (tmin, tmax), else 0 (shadow rays) */
 static inline int mk_bvh_any_hit(const mk_bvh *B, const double *o, const double *d, double tmin, double tmax)
 {
     mk_ray r = mk_ray_make(o, d);
@@ -316,9 +330,10 @@ static inline int mk_bvh_any_hit(const mk_bvh *B, const double *o, const double 
     }
     return 0;
 }
-/* every hit with t > 0; *edge = 1 when one of them has a zero weight (on an edge or a vertex). With wind (1.5.3), *wind = the
-   hits' facings summed (mk_ray_tri_s_): on a closed mesh (every edge run as often one way as the other) and a ray with no edge
-   hit, the mesh's winding number at o, exactly, wherever the hits' t are not rounding-close to 0 */
+/* The number of hits with t > 0; *edge = 1 when one of them has a zero weight (on an edge or a vertex). With wind not
+   NULL, *wind = the hits' facings summed (mk_ray_tri_s_): on a closed mesh (every edge run as often one way as the
+   other) and a ray with no edge hit, that is the mesh's winding number at o, exactly, unless a hit's t is within
+   rounding of 0. */
 static inline int mk_bvh_count_wind_(const mk_bvh *B, const double *o, const double *d, int *edge, int *wind)
 {
     mk_ray r = mk_ray_make(o, d);
@@ -344,14 +359,14 @@ static inline int mk_bvh_count_wind_(const mk_bvh *B, const double *o, const dou
     if (wind) *wind = w;
     return n;
 }
-/* every hit with t > 0 (1.6.0: the one traversal, mk_bvh_count_wind_'s) */
+/* The number of hits of the ray o + t d with t > 0 */
 static inline int mk_bvh_count_hits(const mk_bvh *B, const double *o, const double *d)
 {
     int edge;
     return mk_bvh_count_wind_(B, o, d, &edge, NULL);
 }
-/* the triangles whose boxes meet box q (closed: a shared face or corner counts): their count, the first cap of them in out[]
-   (out may be NULL with cap 0, to count) */
+/* The triangles whose bounding boxes meet box q (closed: a shared face or corner counts): returns their count and puts
+   the first cap of them in out[] (out may be NULL with cap 0, to count only) */
 static inline int mk_bvh_box(const mk_bvh *B, const mk_aabb *q, int *out, int cap)
 {
     int st[MK_BVH_STACK], sp = 0, n = 0;
@@ -368,7 +383,7 @@ static inline int mk_bvh_box(const mk_bvh *B, const mk_aabb *q, int *out, int ca
                 int m = 1;
                 for (int k = 0; k < 3; k++) m &= tb.lo[k] <= q->hi[k] && q->lo[k] <= tb.hi[k];
 #if defined(MK_MUTATE) && MK_MUTATE == 95
-                m &= tb.hi[0] > q->lo[0]; /* a box that only touches is lost */
+                m &= tb.hi[0] > q->lo[0]; /* 95: a box that only touches is lost */
 #endif
                 if (m) {
                     if (n < cap) out[n] = B->tri[i];
@@ -379,8 +394,9 @@ static inline int mk_bvh_box(const mk_bvh *B, const mk_aabb *q, int *out, int ca
     }
     return n;
 }
-/* an edge pq strictly through triangle abc's interior (Moller-Trumbore, every weight and t strictly inside, the determinant judged
-   against the lengths): meshcheck's crossing test. 1.5.2: mk_dec.h's, moved here with its arithmetic (mk_decimate unchanged). */
+/* 1 if segment pq passes strictly through triangle abc's interior (Moller and Trumbore 1997, every weight and t
+   strictly inside). |det| must exceed 1e-15 |pq| |ab| |ac|, so a segment nearly parallel to the plane does not
+   count. */
 static inline int mk_seg_tri_strict(const double *p, const double *q, const double *a, const double *b, const double *c)
 {
     double d[3], e1[3], e2[3], s[3];
@@ -398,7 +414,8 @@ static inline int mk_seg_tri_strict(const double *p, const double *q, const doub
     const double t = f * (e2[0] * qq[0] + e2[1] * qq[1] + e2[2] * qq[2]);
     return t > 0 && t < 1;
 }
-/* faces X and Y of one mesh cross: they share no corner, and an edge of one goes strictly through the other (1.5.2) */
+/* 1 if faces X and Y (corner indices into V) cross: they share no corner, and an edge of one goes strictly through the
+   other */
 static inline int mk_tri_cross(const double *V, const int *X, const int *Y)
 {
     for (int i = 0; i < 3; i++)
@@ -410,9 +427,9 @@ static inline int mk_tri_cross(const double *V, const int *X, const int *Y)
             return 1;
     return 0;
 }
-/* the crossing face pairs of B's mesh (mk_tri_cross), each counted once; with mark (a byte a face, not NULL) only the pairs with a
-   marked face, against every face near it: a local count, near a seam or a changed region (1.5.2, the maintainer's race-c1 H3). -1: no
-   memory. */
+/* The number of crossing face pairs (mk_tri_cross) in B's mesh, each counted once. With mark (a byte per face) not
+   NULL, only the pairs with at least one marked face: a local count, e.g. near a seam or a changed region. Candidates
+   come from the tree's box query. Returns -1 when out of memory. */
 static inline long mk_bvh_crossings(const mk_bvh *B, const unsigned char *mark)
 {
     int cap = 64, *buf = malloc(sizeof *buf * (size_t)cap);
@@ -431,7 +448,7 @@ static inline long mk_bvh_crossings(const mk_bvh *B, const unsigned char *mark)
         for (int i = 0; i < n; i++) {
             const int u = buf[i];
 #if defined(MK_MUTATE) && MK_MUTATE == 206
-            if (u <= t) continue; /* a marked face's pairs with a lower unmarked face lost */
+            if (u <= t) continue; /* 206: a marked face's pairs with a lower-indexed unmarked face are lost */
 #else
             if (u == t || (u < t && (!mark || mark[u]))) continue; /* counted from u */
 #endif
@@ -441,11 +458,13 @@ static inline long mk_bvh_crossings(const mk_bvh *B, const unsigned char *mark)
     free(buf);
     return np;
 }
-/* bd widened by the rounding a triangle's computed squared distance may carry (16 u of the coordinates in play, here those of
-   the root's box and p, which bound every node's), so ties are not pruned. e once a query, the bound only when bd changes. */
+/* bd widened by the rounding a triangle's computed squared distance may carry (e = 16 u of the largest coordinate in
+   play: the root box's and p's, which bound every node's), so ties are not pruned. e is set once a query; the bound
+   changes only with bd. */
 static inline double mk_near_slack_(double bd, double e) { return bd + 2 * sqrt(bd) * e + e * e; }
-/* the closest point on the mesh to p within sqrt(maxd2): returns its squared distance (maxd2 if none), *tri (-1 if none),
-   q the point. mk_bvh_nearest_lab takes only the triangles t with lab[t] >= 0 and lab[t] != skip (lab NULL: all of them). */
+/* The closest point q on the mesh to p, closer than sqrt(maxd2): returns its squared distance and *tri, or maxd2 and
+   *tri = -1 (q untouched) if there is none. Ties go to the lower triangle index. mk_bvh_nearest_lab takes only the
+   triangles t with lab[t] >= 0 and lab[t] != skip (lab NULL: all of them). */
 static inline double mk_bvh_nearest_lab(const mk_bvh *B, const double *p, double maxd2, const int *lab, int skip, int *tri, double *q)
 {
     int st[MK_BVH_STACK], sp = 0, best = -1;
@@ -484,8 +503,9 @@ static inline double mk_bvh_nearest(const mk_bvh *B, const double *p, double max
     return mk_bvh_nearest_lab(B, p, maxd2, NULL, 0, tri, q);
 }
 static inline double mk_winding_number(const double *V, const int *T, int nt, const double *p);
-/* inside a closed mesh: ray parity along three fixed, unaligned directions. A ray with a hit on an edge or a vertex may count
-   one crossing twice, so it does not vote; the clean rays decide when they agree, otherwise the winding number does. */
+/* 1 if p is inside the closed mesh, else 0: ray parity along three fixed, unaligned directions. A ray with a hit on an
+   edge or a vertex may count one crossing twice, so it does not vote; the clean rays decide when they agree, otherwise
+   the winding number does (|w| > 0.5, so either orientation of the mesh works). */
 static inline int mk_bvh_inside(const mk_bvh *B, const double *p)
 {
     static const double dirs[3][3] = {{0.5773502691896258, 0.5773502691896258, 0.5773502691896258},
@@ -498,10 +518,11 @@ static inline int mk_bvh_inside(const mk_bvh *B, const double *p)
     }
     if (in && !out) return 1;
     if (out && !in) return 0;
-    return fabs(mk_winding_number(B->V, B->T, B->nt, p)) > 0.5; /* 1.6.1: either winding, as the parity and mk_sdf (1.6.0: outward only) */
+    return fabs(mk_winding_number(B->V, B->T, B->nt, p)) > 0.5; /* either orientation, like the parity and mk_sdf */
 }
-/* generalized winding number of the mesh at p (sum of solid angles, Van Oosterom and Strackee; gauge's meshtop): 1 inside a
-   closed outward surface, 0 outside, fractional for an open one. O(triangles). */
+/* The generalized winding number of the mesh at p (the sum of solid angles, Van Oosterom and Strackee 1983): 1 inside a
+   closed outward surface (-1 for an inward one), 0 outside, fractional for an open one. O(triangles), no tree
+   needed. */
 static inline double mk_winding_number(const double *V, const int *T, int nt, const double *p)
 {
     double s = 0;
@@ -520,8 +541,8 @@ static inline double mk_winding_number(const double *V, const int *T, int nt, co
 #endif
 }
 
-/* Many queries at once, on OpenMP threads when the caller builds with -fopenmp (mk_par.h): blocks of MK_GEOM_QBLK points
-   handed out as threads come free. Each answer is the one the single call gives for that point, bit for bit. */
+/* Many queries at once, on OpenMP threads when the caller builds with -fopenmp (mk_par.h): blocks of MK_GEOM_QBLK
+   points handed out as threads come free. Each answer is the one the single call gives for that point, bit for bit. */
 enum { MK_GEOM_QBLK = 64 };
 /* the serial forms on points [i0, i1) */
 static inline void mk_bvh_nearest_blk_(const mk_bvh *B, const double *P, double maxd2, double *d2, int *tri, double *q, long i0, long i1)
@@ -543,12 +564,13 @@ static inline void mk_winding_blk_(const double *V, const int *T, int nt, const 
 {
     for (long i = i0; i < i1; i++) w[i] = mk_winding_number(V, T, nt, P + 3 * i);
 }
-/* for n points P[3 n]: d2[i] and tri[i] as mk_bvh_nearest gives them for P + 3 i, and q[3 i] the point when tri[i] >= 0 (left as it
-   was otherwise, as the single call leaves it); any of d2, tri, q may be NULL */
+/* for n points P[3 n]: d2[i] and tri[i] as mk_bvh_nearest gives them for P + 3 i, and q[3 i] the point when tri[i] >= 0
+   (left as it was otherwise, as the single call leaves it); any of d2, tri, q may be NULL */
 static inline void mk_bvh_nearest_many(const mk_bvh *B, const double *P, long n, double maxd2, double *d2, int *tri, double *q)
 {
 #if defined(MK_MUTATE) && MK_MUTATE == 97
-    MK_PAR_CUT_(n, i0, i1, mk_bvh_nearest_blk_(B, P, maxd2, d2, tri, q, i0, i1)); /* 97: points cut by the thread count, each piece's last point left out */
+    /* 97: points cut by the thread count, each piece's last point left out */
+    MK_PAR_CUT_(n, i0, i1, mk_bvh_nearest_blk_(B, P, maxd2, d2, tri, q, i0, i1));
 #else
     const long nb = n > 0 ? (n + MK_GEOM_QBLK - 1) / MK_GEOM_QBLK : 0;
     MK_OMP_(omp parallel for schedule(dynamic, 1) if(nb > 1))
@@ -559,18 +581,20 @@ static inline void mk_bvh_nearest_many(const mk_bvh *B, const double *P, long n,
 static inline void mk_bvh_inside_many(const mk_bvh *B, const double *P, long n, int *in)
 {
 #if defined(MK_MUTATE) && MK_MUTATE == 98
-    MK_PAR_CUT_(n, i0, i1, mk_bvh_inside_blk_(B, P, in, i0, i1)); /* 98: points cut by the thread count, each piece's last point left out */
+    /* 98: points cut by the thread count, each piece's last point left out */
+    MK_PAR_CUT_(n, i0, i1, mk_bvh_inside_blk_(B, P, in, i0, i1));
 #else
     const long nb = n > 0 ? (n + MK_GEOM_QBLK - 1) / MK_GEOM_QBLK : 0;
     MK_OMP_(omp parallel for schedule(dynamic, 1) if(nb > 1))
     for (long b = 0; b < nb; b++) mk_bvh_inside_blk_(B, P, in, b * MK_GEOM_QBLK, (b + 1) * MK_GEOM_QBLK < n ? (b + 1) * MK_GEOM_QBLK : n);
 #endif
 }
-/* w[i] = mk_winding_number(V, T, nt, P + 3 i), O(triangles) each, so a point a block */
+/* w[i] = mk_winding_number(V, T, nt, P + 3 i); O(triangles) each, so each point is its own block */
 static inline void mk_winding_number_many(const double *V, const int *T, int nt, const double *P, long n, double *w)
 {
 #if defined(MK_MUTATE) && MK_MUTATE == 96
-    for (long i = 0; i < n; i++) { /* 96: each point's sum split over the threads by OpenMP's reduction(+:), its order following their count */
+    /* 96: each point's sum split over the threads by OpenMP's reduction(+:), so its order follows the thread count */
+    for (long i = 0; i < n; i++) {
         const double *p = P + 3 * i;
         double s = 0;
         MK_OMP_(omp parallel for schedule(static) reduction(+:s))

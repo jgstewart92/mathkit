@@ -1,3 +1,7 @@
+/* mk_opt.h: Nelder-Mead, Levenberg-Marquardt, golden section, L-BFGS and CMA-ES on problems with known minima
+   (Rosenbrock, quadratics, an exact exponential fit, a rotated ellipsoid, Rastrigin, and Brown-Dennis and Penalty I
+   from Moré, Garbow and Hillstrom 1981), an ill-conditioned linear fit against long-double normal equations, ties,
+   non-finite values and refusals. */
 #include "../include/mk_opt.h"
 #include "t.h"
 
@@ -35,7 +39,7 @@ static double rosen_fg(const double *x, double *g, void *ctx)
     return f;
 }
 enum { EN = 10 };
-/* 1.0.2 regression helpers, from the verification work's lbfgs_demos.c and cmaes_demos.c (Result 71) */
+/* objectives for the L-BFGS and CMA-ES edge cases: a NaN gradient, a huge scale, |x|^4, call counting, NaN regions */
 static double fg_nan2(const double *x, double *g, void *c) { (void)x, (void)c; g[0] = NAN, g[1] = 0; return NAN; }
 static double fg_scaled2(const double *x, double *g, void *c)
 {
@@ -43,7 +47,7 @@ static double fg_scaled2(const double *x, double *g, void *c)
     g[0] = s * 2 * x[0], g[1] = s * 20 * x[1];
     return s * (x[0] * x[0] + 10 * x[1] * x[1]);
 }
-static double fg_quartic4(const double *x, double *g, void *c) /* the verification work's lbfgs_yy_underflow.c: f = |x|^4, n 4 */
+static double fg_quartic4(const double *x, double *g, void *c) /* f = |x|^4, n 4: near its minimum y.y underflows */
 {
     (void)c;
     long double q = 0;
@@ -77,7 +81,8 @@ static double rastrigin(const double *x, void *ctx)
     return f;
 }
 static double rosen2(const double *p, void *ctx) { (void)ctx; return 100 * (p[1] - p[0] * p[0]) * (p[1] - p[0] * p[0]) + (1 - p[0]) * (1 - p[0]); }
-/* the verification work's findings 4 and 5: a kappa 1e7 linear fit, and Brown-Dennis and Penalty I from Moré, Garbow and Hillstrom */
+/* a linear fit with condition 1e7, and Brown-Dennis and Penalty I from Moré, Garbow and Hillstrom 1981, whose tables
+   list the minima */
 enum { KM = 28 };
 static double KA[KM * 2], KB[KM];
 static void klin_r(const double *p, double *r, void *ctx) { (void)ctx; for (int i = 0; i < KM; i++) r[i] = KA[2 * i] * p[0] + KA[2 * i + 1] * p[1] - KB[i]; }
@@ -181,7 +186,7 @@ int main(void)
     mk_cmaes_opts so = {.sigma0 = 0.3, .maxevals = 20000, .ftarget = 1e-10, .seed = 3};
     double sf = mk_cmaes(rastrigin, &n3, 3, one, &so);
     printf("info  one small-step run from the same start stops in a local basin: f %.4g at (%.3f, %.3f, %.3f)\n", sf, one[0], one[1], one[2]);
-    /* ---- the verification work's fuzz findings, 2026-11-14 (FINDINGS.md 4, 5) and the contract note on mk_nm ---- */
+    /* ---- cases found by fuzzing: the ill-conditioned fit and the two listed minima; mk_nm's refusal ---- */
     {
         long double u1[KM], u2[KM], d = 0, n1 = 0, n2 = 0;
         for (int i = 0; i < KM; i++) u1[i] = t_rand(), n1 += u1[i] * u1[i];
@@ -201,23 +206,24 @@ int main(void)
         long double det = ata[0] * ata[2] - ata[1] * ata[1], x0 = (ata[2] * atb[0] - ata[1] * atb[1]) / det, x1 = (ata[0] * atb[1] - ata[1] * atb[0]) / det, cs = 0;
         for (int i = 0; i < KM; i++) { long double e = KA[2 * i] * x0 + KA[2 * i + 1] * x1 - KB[i]; cs += e * e; }
         double kp[2] = {0, 0}, kc = mk_lm(klin_r, klin_j, NULL, KM, 2, kp, NULL), xn = (double)sqrtl(x0 * x0 + x1 * x1);
-        double bound = 1e-8 * (double)cs; /* a converged fit is at the minimum to rounding: the patched one is within 2e-11 */
-        CHECK(kc - (double)cs <= bound, "finding 4: a kappa 1e7 linear fit (28 x 2, |x*| %.2g) reaches its minimum: excess %.3g against a bound of 1e-8 of the minimum, %.3g", xn, kc - (double)cs, bound);
+        /* a converged fit is at the minimum to rounding: a correct one is within 2e-11 */
+        double bound = 1e-8 * (double)cs;
+        CHECK(kc - (double)cs <= bound, "Levenberg-Marquardt: a kappa 1e7 linear fit (28 x 2, |x*| %.2g) reaches its minimum: excess %.3g against a bound of 1e-8 of the minimum, %.3g", xn, kc - (double)cs, bound);
     }
     mk_lm_opts mo = {.iters = 1000};
     double bx[4] = {25, 5, -5, -1}, bcj = mk_lm(bden_r, bden_j, NULL, 20, 4, bx, &mo);
     double bx2[4] = {25, 5, -5, -1}, bcd = mk_lm(bden_r, NULL, NULL, 20, 4, bx2, &mo);
-    CHECK(fabs(bcj - 85822.2) < 0.1 && fabs(bcd - 85822.2) < 0.1, "finding 5: Brown-Dennis reaches its listed minimum 85822.2 (Jacobian %.6g, differences %.6g)", bcj, bcd);
+    CHECK(fabs(bcj - 85822.2) < 0.1 && fabs(bcd - 85822.2) < 0.1, "Levenberg-Marquardt: Brown-Dennis reaches its listed minimum 85822.2 (Jacobian %.6g, differences %.6g)", bcj, bcd);
     PN = 4;
     double px[10] = {1, 2, 3, 4}, pcd = mk_lm(pen_r, NULL, NULL, 5, 4, px, &mo);
     PN = 10;
     double px2[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, pcj = mk_lm(pen_r, pen_j, NULL, 11, 10, px2, &mo);
-    CHECK(fabs(pcd - 2.24997e-5) < 1e-9 && fabs(pcj - 7.08765e-5) < 1e-9, "finding 5: Penalty I reaches its listed minima (n 4 by differences %.6g, 2.24997e-5; n 10 with J %.6g, 7.08765e-5)", pcd, pcj);
+    CHECK(fabs(pcd - 2.24997e-5) < 1e-9 && fabs(pcj - 7.08765e-5) < 1e-9, "Levenberg-Marquardt: Penalty I reaches its listed minima (n 4 by differences %.6g, 2.24997e-5; n 10 with J %.6g, 7.08765e-5)", pcd, pcj);
     long nev = 12345;
     double nst[1] = {1}, nps[1] = {0};
     double nv = mk_nm(rosen, NULL, 0, nps, nst, 10, 1e-9, &nev);
-    CHECK(isnan(nv) && nev == 0, "contract: Nelder-Mead with n out of range returns NaN and sets the call count to 0 (got %ld)", nev);
-    { /* 1.0.2: the verification work's L-BFGS and CMA-ES findings (Result 71) */
+    CHECK(isnan(nv) && nev == 0, "Nelder-Mead with n out of range returns NaN and sets the call count to 0 (got %ld)", nev);
+    { /* L-BFGS and CMA-ES on non-finite and extreme input */
         mk_lbfgs_opts o = {0};
         double x[2] = {1, 1};
         mk_lbfgs(fg_nan2, NULL, 2, x, &o);
@@ -246,35 +252,33 @@ int main(void)
         }
         CHECK(r[1] == r[0] && ev[1] == ev[0], "cmaes: a NaN region ranks like +Inf, bit for bit (f %g/%g, evals %ld/%ld)", r[1], r[0], ev[1], ev[0]);
     }
-#ifndef T_OLD
-    { /* 1.0.3: the verification work Result 74: 3 m wrapped an int, malloc got 16 bytes and res() wrote past it */
+    { /* 3 m would wrap an int: refused before allocating */
         double p3[3] = {0, 0, 0};
         CHECK(mk_lm(rosen_r, NULL, NULL, 715827883, 3, p3, NULL) == -1, "mk_lm refuses m = 715827883, n = 3 before allocating or calling res");
     }
-#endif
-    { /* 1.0.4: the verification work finding H (Result 78): y.y underflowed once |y| < 1e-154, gamma went to Inf and the search failed */
+    { /* y.y underflows once |y| < 1e-154; the scaling gamma must stay finite and the search go on */
         double x4[4] = {0.7, -1.3, 0.2, 2.1};
         mk_lbfgs_opts o4 = {.gtol = 1e-300, .ftol = 1e-300, .iters = 3000};
         double f4 = mk_lbfgs(fg_quartic4, NULL, 4, x4, &o4);
         CHECK(o4.status >= 0 && f4 < 1e-290, "lbfgs: |x|^4 to f below 1e-290 without y.y underflow (status %d, f %g)", o4.status, f4);
     }
-    { /* 1.6.0, the review's C1: lambda 1 has no parent (mu 0, mueff 1/0); 1.5.6 ran a generation and gave up with no reason */
+    { /* lambda 1 has no parent (mu 0, mueff 1/0): refused before any evaluation */
         int n2 = 2;
         double x1[2] = {1, 1};
         mk_cmaes_opts o1 = {.sigma0 = 0.5, .lambda = 1, .seed = 1};
         const double f1 = mk_cmaes(sphn, &n2, 2, x1, &o1);
-        CHECK(isnan(f1) && o1.status == -1 && o1.evals == 0 && x1[0] == 1 && x1[1] == 1, "C1 (review): cmaes refuses lambda 1 before evaluating (f %g, status %d, %ld evaluations)", f1,
+        CHECK(isnan(f1) && o1.status == -1 && o1.evals == 0 && x1[0] == 1 && x1[1] == 1, "cmaes refuses lambda 1 before evaluating (f %g, status %d, %ld evaluations)", f1,
               o1.status, o1.evals);
     }
-    { /* review 2 #2 (1.6.1): a start simplex whose values tie stopped Nelder-Mead at its start (1.6.0: x^2 from -0.5, step 1, gave 0.25) */
+    { /* a start simplex whose values tie (x^2 from -0.5, step 1: 0.25 at both vertices) must not stop Nelder-Mead */
         int n1 = 1, n2 = 2;
         double p1[1] = {-0.5}, s1[1] = {1}, p2[2] = {-0.5, -0.5}, s2[2] = {1, 1};
         long e1, e2;
         const double f1 = mk_nm(sphn, &n1, 1, p1, s1, 1000, 1e-9, &e1), f2 = mk_nm(sphn, &n2, 2, p2, s2, 1000, 1e-9, &e2);
-        CHECK(f1 < 1e-8 && f2 < 1e-8, "review 2 #2: Nelder-Mead from tied starts: x^2 from -0.5 reaches %.2g (%ld calls), x^2 + y^2 from (-0.5, -0.5) %.2g (%ld calls)", f1, e1, f2, e2);
+        CHECK(f1 < 1e-8 && f2 < 1e-8, "Nelder-Mead from tied starts: x^2 from -0.5 reaches %.2g (%ld calls), x^2 + y^2 from (-0.5, -0.5) %.2g (%ld calls)", f1, e1, f2, e2);
     }
-    { /* review 2 #2 again (1.6.2): a tie reached later still stopped 1.6.1 (x^2 from -3.5, step 1: {-0.5, 0.5}, 0.25 after 6 calls; 14 of
-         the 20 half-integer starts -9.5 to 9.5 stopped at 0.25) */
+    { /* a tie reached later: x^2 from -3.5, step 1, reaches the simplex {-0.5, 0.5} (0.25 at both) after 6 calls; every
+         half-integer start from -9.5 to 9.5 must still reach the minimum */
         int n1 = 1, n2 = 2, away = 0;
         double p1[1] = {-3.5}, s1[1] = {1}, p2[2] = {-3.5, -3.5}, s2[2] = {1, 1};
         long e1, e2;
@@ -283,10 +287,10 @@ int main(void)
             double q[1] = {x0};
             away += mk_nm(sphn, &n1, 1, q, s1, 1000, 1e-9, NULL) > 1e-8;
         }
-        CHECK(f1 < 1e-8 && f2 < 1e-8 && away == 0, "review 2 #2, later ties: x^2 from -3.5 reaches %.2g (%ld calls), x^2 + y^2 from (-3.5, -3.5) %.2g (%ld calls); %d of 20 half-integer starts stop away",
+        CHECK(f1 < 1e-8 && f2 < 1e-8 && away == 0, "Nelder-Mead, ties reached later: x^2 from -3.5 reaches %.2g (%ld calls), x^2 + y^2 from (-3.5, -3.5) %.2g (%ld calls); %d of 20 half-integer starts stop away",
               f1, e1, f2, e2, away);
     }
-    { /* review 2 A5 (1.6.2): a refusal left the counts of the run before in a reused opts (cmaes evals, lbfgs iters_used and evals) */
+    { /* a refusal sets the counts in a reused opts to 0 (cmaes evals, lbfgs iters_used and evals) */
         int n2 = 2;
         double x1[2] = {1, 1}, x2[2] = {1, 2};
         mk_cmaes_opts o1 = {.sigma0 = 0.5, .seed = 1};
@@ -299,7 +303,7 @@ int main(void)
         const long ran2 = o2.evals;
         const double f2 = mk_lbfgs(fg_quartic4, NULL, -1, x2, &o2);
         CHECK(ran > 0 && isnan(f1) && o1.status == -1 && o1.evals == 0 && ran2 > 0 && isnan(f2) && o2.status == -1 && o2.evals == 0 && o2.iters_used == 0,
-              "review 2 A5: a refusal after a run counts 0: cmaes lambda 1 %ld evaluations (the run %ld), lbfgs n -1 %ld and %d iterations (the run %ld)", o1.evals, ran, o2.evals,
+              "a refusal after a run counts 0: cmaes lambda 1 %ld evaluations (the run %ld), lbfgs n -1 %ld and %d iterations (the run %ld)", o1.evals, ran, o2.evals,
               o2.iters_used, ran2);
     }
     return wrong;

@@ -1,6 +1,7 @@
-/* mk_snet on known shapes (s-forms' rows, 2026-11-15, plus the kit's): a ball raw and relaxed, a ball split into two labels,
-   a torus, a ball from a scalar field, two voxels touching at an edge, the refusals. With a folder argument it also writes the
-   surfaces as OBJ files there, for test/check.sh to give to mesher's meshcheck. */
+/* mk_snet on known shapes: a voxel ball raw and relaxed (closed, Euler characteristic 2, volume within 3 % of the
+   sphere's 4/3 pi R^3), the same ball from its distance field, the ball split into two labels, a torus (Euler 0), two
+   voxels touching at an edge, the refusals. With a folder argument it also writes the surfaces there as OBJ files,
+   which test/check.sh checks with meshcheck. */
 #include "../include/mk_snet.h"
 #include "t.h"
 #include <stdint.h>
@@ -119,7 +120,8 @@ int main(int argc, char **argv)
         CHECK(mk_snet_build_iso(phi, n, n, n, org, h, 0, 0, &t) == -1 && !t.V && t.nv == 0, "a NaN in phi is refused, the net left empty");
         free(T), mk_snet_free(&s), free(phi);
     }
-    /* two labels touching: the ball split at x < c0 (1) and x >= c0 (2); their interface triangles are the same, wound oppositely */
+    /* two labels touching: the ball split at x < c0 (1) and x >= c0 (2); their interface triangles are the same, wound
+       oppositely, two for each interface face */
     for (int k = 0; k < n; k++)
         for (int j = 0; j < n; j++)
             for (int i = 0; i < n; i++) {
@@ -160,7 +162,8 @@ int main(int argc, char **argv)
     obj("torus", &s, T3, n3);
     CHECK(c3 && x3 == 0 && mk_snet_split(&s, g, 3) == 0, "torus: closed, Euler characteristic %d (a torus's 0), no split cells", x3);
     free(T3), mk_snet_free(&s);
-    /* two voxels touching at an edge: their surface meets itself there (four triangles on one edge), and the split count says so */
+    /* two voxels touching at an edge: their surface meets itself there (four triangles on one edge), and the split
+       count says so */
     {
         uint8_t d[4 * 4 * 4] = {0};
         d[(1 * 4 + 1) * 4 + 1] = 1, d[(1 * 4 + 2) * 4 + 2] = 1;
@@ -183,16 +186,15 @@ int main(int argc, char **argv)
               "refused, the net left empty: nx 0, h 0, a NaN origin, iters -1, nx INT_MAX");
     }
     free(g);
-#ifndef T_OLD /* 1.2.2 reads zs = NULL */
-    { /* the verification work N-A (Result 87; scratch/the verification work/mk-new/findings/demo.c) */
+    { /* a net left empty by a refusal answers -1 for any cell's vertex */
         const uint8_t lab1[1] = {1};
         const double o0[3] = {0, 0, 0};
         mk_snet s;
         const int r = mk_snet_build(lab1, 1, 1, 1, o0, -1, 0, &s);
-        CHECK(r == -1 && mk_snet_vertex(&s, 0, 0, 0) == -1, "N-A: asking an empty net (a refusal's) for a vertex gives -1");
+        CHECK(r == -1 && mk_snet_vertex(&s, 0, 0, 0) == -1, "asking an empty net (a refusal's) for a vertex gives -1");
     }
-#endif
-    { /* review 2 #14 (1.6.1): faces asked of a grid other than the net's own found dual cells with no vertex and read V[-3] (1.6.0) */
+    { /* faces asked of a grid other than the net's own: its dual cells can have no vertex, so the call must return -1,
+         not read V[-3] */
         enum { G = 16 };
         static uint8_t ga[G * G * G], gb[G * G * G];
         for (int k = 0; k < G; k++)
@@ -205,7 +207,7 @@ int main(int argc, char **argv)
         mk_snet s;
         int *Ta = NULL, *Tb = NULL, na = -9, nb = -9;
         if (!mk_snet_build(ga, G, G, G, o0, 1, 0, &s)) na = mk_snet_faces(&s, ga, 1, &Ta), nb = mk_snet_faces(&s, gb, 1, &Tb);
-        CHECK(na > 0 && nb == -1 && !Tb, "review 2 #14: a ball's net asked for the faces of a larger ball's grid gives %d (-1 wanted; its own grid %d triangles)", nb, na);
+        CHECK(na > 0 && nb == -1 && !Tb, "a ball's net asked for the faces of a larger ball's grid gives %d (-1 wanted; its own grid %d triangles)", nb, na);
         free(Ta), free(Tb), mk_snet_free(&s);
     }
     return wrong;

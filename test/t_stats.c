@@ -1,3 +1,5 @@
+/* mk_stats.h: median and type 7 quantiles against sorted arrays and hand-computed values, Welford's mean and variance
+   against a long-double two-pass computation, Chan's merge of pieces, and infinite, huge and subnormal values. */
 #include "../include/mk_stats.h"
 #include "t.h"
 #include <string.h>
@@ -54,21 +56,22 @@ int main(void)
         CHECK(pv < 1e-12 && pm < 1e-15 && parts.n == nn && parts.min == one.min && parts.max == one.max, "seven uneven pieces merged (Chan): variance %.2g, mean %.2g relative, count and range equal", pv, pm);
         free(xx);
     }
-    { /* 1.2.2: the verification work Result 84, S1 and S2 */
+    { /* infinite values in a sorted array, and select with k = n */
         double a3[3] = {1, 2, INFINITY}, a2[2] = {-INFINITY, 1}, a5[5] = {4, 3, 2, 1, 99};
-        CHECK(mk_quantile_sorted(a3, 3, 0.5) == 2, "S1: quantile 0.5 of {1, 2, inf} is 2 (got %g)", mk_quantile_sorted(a3, 3, 0.5));
-        CHECK(mk_quantile_sorted(a2, 2, 0) == -INFINITY, "S1: quantile 0 of {-inf, 1} is -inf (got %g)", mk_quantile_sorted(a2, 2, 0));
-        CHECK(isnan(mk_select(a5, 4, 4)), "S2: select with k = n is refused (NaN), never a[n]");
+        CHECK(mk_quantile_sorted(a3, 3, 0.5) == 2, "quantile 0.5 of {1, 2, inf} is 2 (got %g)", mk_quantile_sorted(a3, 3, 0.5));
+        CHECK(mk_quantile_sorted(a2, 2, 0) == -INFINITY, "quantile 0 of {-inf, 1} is -inf (got %g)", mk_quantile_sorted(a2, 2, 0));
+        CHECK(isnan(mk_select(a5, 4, 4)), "select with k = n is refused (NaN), never a[n]");
     }
-    { /* 1.6.0, the review's S1: neighbours whose difference overflows (1.5.6: inf) */
+    { /* a quantile between neighbours whose difference overflows */
         const double big[2] = {-0x1.fffffffffffffp+1023, 0x1.fffffffffffffp+1023};
         const double q5 = mk_quantile_sorted(big, 2, 0.5), q25 = mk_quantile_sorted(big, 2, 0.25);
-        CHECK(q5 == 0 && fabs(q25 + 0.5 * big[1]) <= 1e-15 * big[1], "S1 (review): quantiles of {-DBL_MAX, DBL_MAX}: 0.5 gives %g (0), 0.25 gives %.17g (-DBL_MAX / 2)", q5, q25);
+        CHECK(q5 == 0 && fabs(q25 + 0.5 * big[1]) <= 1e-15 * big[1], "quantiles of {-DBL_MAX, DBL_MAX}: 0.5 gives %g (0), 0.25 gives %.17g (-DBL_MAX / 2)", q5, q25);
     }
-    { /* review 2 #5 (1.6.1): the even median's 0.5 (lo + hi) overflowed on finite data (1.6.0: inf) */
+    { /* an even median of finite values near DBL_MAX stays finite, where 0.5 (lo + hi) overflows; two of the least
+         subnormal average to themselves */
         double a[2] = {1e308, 1.7e308}, b[2] = {-1.7e308, -1e308}, c[4] = {0x1.fffffffffffffp1023, 0x1.fffffffffffffp1023, 1, 0x1.fffffffffffffp1023}, d[2] = {0x1p-1074, 0x1p-1074};
         const double ma = mk_median(a, 2), mb = mk_median(b, 2), mc = mk_median(c, 4), md = mk_median(d, 2);
-        CHECK(ma == 1.35e308 && mb == -1.35e308 && mc == 0x1.fffffffffffffp1023 && md == 0x1p-1074, "review 2 #5: medians {1e308, 1.7e308} %g, {-1.7e308, -1e308} %g, {DBL_MAX x 3, 1} %g; two of the least subnormal %g",
+        CHECK(ma == 1.35e308 && mb == -1.35e308 && mc == 0x1.fffffffffffffp1023 && md == 0x1p-1074, "medians {1e308, 1.7e308} %g, {-1.7e308, -1e308} %g, {DBL_MAX x 3, 1} %g; two of the least subnormal %g",
               ma, mb, mc, md);
     }
     return wrong;

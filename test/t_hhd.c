@@ -1,11 +1,11 @@
-/* mk_hhd on known cases (1.5.6): a pinhole camera's motion field, from Longuet-Higgins and Prazdny 1980 (The interpretation of
-   a moving retinal image, Proc. R. Soc. Lond. B 208), over a plane facing the camera, a tilted plane and a box room; then the
-   split's own properties: three parts orthogonal and adding up, each part's divergence and curl, a field built from known
-   potentials split back into them, the refusals, and 1920 x 1080. The camera's numbers are MADE UP but plausible: a 256 x 144
-   frame, focal length 1000 px (a 14.6 x 8.2 degree view) or 200 px for the room (65 x 39 degrees), walking forward at
-   2 m/s toward a wall 4 m off, heading 0.1 m/s right and 0.05 m/s up, rolling at 0.8 rad/s (a quick head tilt), panning
-   (yaw) at 0.02 rad/s. The camera frame: x right, y down (image rows), z forward; the flow in pixels per second at pixel
-   centres. The picture of the main row: scratch/hhd-work/hhdpic.c. */
+/* mk_hhd on known cases: a pinhole camera's motion field, from Longuet-Higgins and Prazdny 1980 (The interpretation of
+   a moving retinal image, Proc. R. Soc. Lond. B 208), over a plane facing the camera, a tilted plane and a box room;
+   then the split's own properties: three parts orthogonal and adding up, each part's divergence and curl, a field built
+   from known potentials split back into them, the refusals, and 1920 x 1080. The camera's numbers are arbitrary but
+   plausible: a 256 x 144 frame, focal length 1000 px (a 14.6 x 8.2 degree view) or 200 px for the room (65 x 39
+   degrees), walking forward at 2 m/s toward a wall 4 m off, heading 0.1 m/s right and 0.05 m/s up, rolling at 0.8 rad/s
+   (a quick head tilt), panning (yaw) at 0.02 rad/s. The camera frame: x right, y down (image rows), z forward; the flow
+   in pixels per second at pixel centres. */
 #include "../include/mk_hhd.h"
 #include "t.h"
 #include <stdlib.h>
@@ -21,7 +21,8 @@ static double depth(const cam *c, double x, double y)
 {
     if (c->scene == 0) return c->Z0;
     if (c->scene == 1) return c->Z0 / (1 + c->p * x / c->f + c->q * y / c->f);
-    double Z = 6.0, t; /* the room (MADE UP): back wall 6 m ahead, side walls 1.8 m left and 2.2 m right, floor 1.2 m down, ceiling 1.5 m up */
+    /* the room: back wall 6 m ahead, side walls 1.8 m left and 2.2 m right, floor 1.2 m down, ceiling 1.5 m up */
+    double Z = 6.0, t;
     if (x > 0 && (t = 2.2 * c->f / x) < Z) Z = t;
     if (x < 0 && (t = -1.8 * c->f / x) < Z) Z = t;
     if (y > 0 && (t = 1.2 * c->f / y) < Z) Z = t;
@@ -235,7 +236,7 @@ int main(void)
             if (!r) o = orth(&K, u, v);
             mk_hhd_free(&K);
         }
-        CHECK(o < 1e-13, "1920 x 1080 random flow: parts orthogonal (%.2g); split in %.3f s, not checked (1.6.1: a loaded host failed 1.6.0 here, review 2 #7)", o, dt);
+        CHECK(o < 1e-13, "1920 x 1080 random flow: parts orthogonal (%.2g); split in %.3f s, the time not checked (it depends on the machine's load)", o, dt);
         free(u), free(v);
     }
     return wrong;

@@ -1,7 +1,8 @@
-/* mathkit: spectral analysis on mk_fft.h. Windows (rectangular, Hann, Hamming, 4-term Blackman-Harris, Kaiser), periodic
-   (DFT-even) as spectral analysis wants; STFT frames; periodograms and Welch averages, one-sided, as a density (units^2 / Hz:
-   white noise of variance s^2 reads 2 s^2 / fs) or as a power spectrum (a sine of amplitude A centred on a bin reads A^2/2
-   there); cross-spectra (conj(X) Y, scipy's convention), transfer function and coherence. nfft a power of 2, >= 4. Header only. */
+/* mathkit: spectral analysis on mk_fft.h. Windows (rectangular, Hann, Hamming, 4-term Blackman-Harris, Kaiser),
+   periodic (DFT-even) as spectral analysis wants; STFT frames; periodograms and Welch averages, one-sided, as a density
+   (units^2 / Hz: white noise of variance s^2 reads 2 s^2 / fs) or as a power spectrum (a sine of amplitude A centred on
+   a bin reads A^2/2 there); cross-spectra (conj(X) Y, scipy's convention), transfer function and coherence. nfft a
+   power of 2, >= 4. Header only. */
 #ifndef MK_SPEC_H
 #define MK_SPEC_H
 #include "mk_fft.h"
@@ -21,7 +22,7 @@ static inline double mk_bessel_i0(double x)
         term *= q / ((double)k * k);
         sum += term;
 #if defined(MK_MUTATE) && MK_MUTATE == 82
-        if (k >= 4) break;
+        if (k >= 4) break; /* planted fault: the series cut short */
 #endif
         if (term < 1e-17 * sum) break;
     }
@@ -37,7 +38,7 @@ static inline void mk_window(int type, int n, double beta, double *w)
         case MK_WIN_HANN: w[i] = 0.5 - 0.5 * c; break;
         case MK_WIN_HAMMING: w[i] = 0.54 - 0.46 * c; break;
         case MK_WIN_BLACKMAN_HARRIS:
-#if defined(MK_MUTATE) && MK_MUTATE == 83
+#if defined(MK_MUTATE) && MK_MUTATE == 83 /* planted fault: a wrong coefficient */
             w[i] = 0.35875 - 0.48 * c + 0.14128 * cos(2 * tp * i / n) - 0.01168 * cos(3 * tp * i / n);
 #else
             w[i] = 0.35875 - 0.48829 * c + 0.14128 * cos(2 * tp * i / n) - 0.01168 * cos(3 * tp * i / n);
@@ -65,8 +66,8 @@ static inline void mk_spec_free(mk_spec *s)
     free(s->w), mk_fft_free(&s->half);
     s->w = NULL;
 }
-/* 0, or -1 for a size not a power of 2 (or under 4), a window not one of MK_WIN_*, fs not positive and finite (1.6.0: 1.5.6 took
-   them as rectangular and 1), or no memory */
+/* 0, or -1 for a size not a power of 2 (or under 4), a window not one of MK_WIN_*, fs not positive and finite, or no
+   memory. mk_spec_free releases it. */
 static inline int mk_spec_init(mk_spec *s, int nfft, int window, double beta, double fs)
 {
     s->w = NULL, s->s1 = s->s2 = 0, s->nfft = 0, s->fs = 1;
@@ -80,9 +81,8 @@ static inline int mk_spec_init(mk_spec *s, int nfft, int window, double beta, do
     for (int i = 0; i < nfft; i++) s->s1 += s->w[i], s->s2 += s->w[i] * s->w[i];
     return 0;
 }
-/* the windowed frame x[start .. start + nfft) to X[0 .. nfft/2]; samples outside [0, len) count as 0; detrend 1 removes the
-   frame's mean first (over the samples inside). The plan is only read (1.6.1: 1.6.0 windowed into a buffer of the plan's, so two
-   threads sharing one plan in mk_welch or mk_csd mixed each other's frames), so one plan serves any number of threads. */
+/* the windowed frame x[start .. start + nfft) to X[0 .. nfft/2]; samples outside [0, len) count as 0; detrend 1 removes
+   the frame's mean first (over the samples inside). The plan is only read, so one plan serves any number of threads. */
 static inline void mk_stft_frame(const mk_spec *s, const double *x, long len, long start, int detrend, double complex *X)
 {
     int n = s->nfft;
@@ -102,12 +102,13 @@ static inline double mk_spec_scale_(const mk_spec *s, int k, int scaling)
 {
     double one = (k == 0 || k == s->nfft / 2) ? 1 : 2;
 #if defined(MK_MUTATE) && MK_MUTATE == 81
-    one = 1;
+    one = 1; /* planted fault: the one-sided spectrum not doubled */
 #endif
     return scaling == MK_SPEC_POWER ? one / (s->s1 * s->s1) : one / (s->fs * s->s2);
 }
-/* Welch: segments of nfft stepping nfft - noverlap through x[len] (the last partial one dropped), each detrended to its
-   mean if detrend, periodograms averaged into p[0 .. nfft/2]. Returns the segments used (0: x shorter than one). */
+/* Welch: segments of nfft stepping nfft - noverlap (nfft if that is not positive) through x[len], the last partial one
+   dropped, each detrended to its mean if detrend, periodograms averaged into p[0 .. nfft/2]. Returns the segments used
+   (0: x shorter than one), or -1 for no memory. */
 static inline long mk_welch(const mk_spec *s, const double *x, long len, int noverlap, int detrend, int scaling, double *p)
 {
     int n = s->nfft, nb = n / 2 + 1, step = n - noverlap > 0 ? n - noverlap : n;
@@ -123,7 +124,8 @@ static inline long mk_welch(const mk_spec *s, const double *x, long len, int nov
     free(X);
     return seg;
 }
-/* Welch cross-spectral density of x and y: pxy = <conj(X) Y>, and pxx, pyy (any may be NULL), density scaling */
+/* Welch cross-spectral density of x and y: pxy = <conj(X) Y>, and pxx, pyy (any may be NULL), density scaling; segments
+   and return as mk_welch */
 static inline long mk_csd(const mk_spec *s, const double *x, const double *y, long len, int noverlap, int detrend,
                           double complex *pxy, double *pxx, double *pyy)
 {
@@ -140,7 +142,7 @@ static inline long mk_csd(const mk_spec *s, const double *x, const double *y, lo
         mk_stft_frame(s, x, len, st, detrend, X), mk_stft_frame(s, y, len, st, detrend, Y);
         for (int k = 0; k < nb; k++) {
 #if defined(MK_MUTATE) && MK_MUTATE == 84
-            if (pxy) pxy[k] += X[k] * Y[k];
+            if (pxy) pxy[k] += X[k] * Y[k]; /* planted fault: no conjugate */
 #else
             if (pxy) pxy[k] += conj(X[k]) * Y[k];
 #endif

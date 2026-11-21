@@ -1,5 +1,7 @@
-# mathkit: header-only, nothing to build for users. `make check` builds every test, then every planted fault, and prints "wrong: N";
-# the threads' checks (t_par with -fopenmp) run either way. `make check OMP=1` builds every test and planted fault with -fopenmp too.
+# mathkit is header-only: nothing to build to use it. `make check` builds and runs every test, then every planted fault,
+# and prints "wrong: N". `make check OMP=1` builds every test and planted fault with -fopenmp too; the threads' checks
+# (t_par with -fopenmp) run either way. The mesh rows need an external closed-mesh checker, path in MESHCHECK.
+# `make bench` times CG and the BVH queries.
 CFLAGS = -std=c23 -O2 -ffp-contract=off -Wall -Wextra -Wpedantic -Werror
 OMPFLAG = $(if $(filter 1,$(OMP)),-fopenmp)
 
