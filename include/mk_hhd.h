@@ -9,25 +9,31 @@
    angles, the rotational part runs along it, the harmonic part takes the rest with no condition. On a rectangle this is
    the standard choice that gives three orthogonal parts and puts a uniform shift in the harmonic one: with phi Neumann
    (dphi/dn the field's normal flow) the harmonic part could carry no flux through the frame, which on a simply
-   connected frame leaves no harmonic field at all, so a shift would land in the gradient part. The cost: near the
-   frame, part of any expansion or swirl (the flow crossing the frame) is harmonic. A swirl or an expansion centred on a
-   16:9 frame keeps 62 % of its energy in its own part, 38 % harmonic; on a square, 84 % (test/t_hhd.c measures it). The
-   rates below are exact all the same: div(grad phi) = div v and curl(rot psi) = curl v at every inner corner.
+   connected frame leaves no harmonic field at all, so a shift would land in the gradient part. So near the frame,
+   part of any expansion or swirl, the flow that crosses the frame, is harmonic: a swirl or an expansion centred on a
+   16:9 frame keeps 62 % of its energy in its own part and 38 % harmonic; on a square, 84 % (test/t_hhd.c measures it).
+   That share is the frame's physics, not an error of the split: inside the frame, motion crossing its edge cannot be
+   told from motion coming in from outside, so no split of the frame alone can give it to the expansion or the swirl.
+   The rates below are exact all the same: div(grad phi) = div v and curl(rot psi) = curl v at every inner corner.
    Discrete form: pixel (i, j) centred at (i, j); the potentials at the pixel corners (i - 1/2, j - 1/2), 0 on the
    frame's corners; a pixel's gradient is the 2 x 2 box difference of its four corners. So div(rot psi) and curl(grad
-   phi) vanish at every inner corner to rounding, the parts are orthogonal to rounding, and phi and psi are
-   least-squares fits: A phi = -div v and A psi = curl v at the inner corners (div and curl the box differences there, A
-   the box Laplacian). A's sine modes have the values 2 (1 - cos(pi k / nx) cos(pi l / ny)): the solve is a sine
-   transform along y (mk_fftm, length 2 ny) and the tridiagonal (-cos(pi l / ny), 2, -cos(pi l / ny)) along x for each
-   mode (mk_tridiag). The box differences are exact on quadratic fields, which is what a pinhole camera's flow over a
-   plane is (Longuet-Higgins and Prazdny 1980). A pattern that alternates pixel by pixel has no box divergence or curl,
-   so such noise stays in the harmonic part.
+   phi) vanish at every inner corner to rounding, and phi and psi are least-squares fits: A phi = -div v and A psi =
+   curl v at the inner corners (div and curl the box differences there, A the box Laplacian). A's sine modes have the
+   values 2 (1 - cos(pi k / nx) cos(pi l / ny)): the solve is a sine transform along one axis (mk_fftm, length 2 ny, or
+   2 nx when those transforms count under 0.8 of the others) and, for each mode l of n along it, the tridiagonal
+   (-cos(pi l / n), 2, -cos(pi l / n)) along the other (mk_tridiag). The box differences are exact on quadratic fields,
+   which is what a pinhole camera's flow over a plane is (Longuet-Higgins and Prazdny 1980). A pattern that alternates
+   pixel by pixel has no box divergence or curl, so such noise stays in the harmonic part.
+   Accuracy (test/t_hhd.c, sizes from 2 x 2 to 3840 x 2160, random, camera and smooth fields): gx + rx + hx, summed in
+   that order, is u to within 4 ulps of the largest of the four at that pixel (2 at most in the tests), and so for y;
+   the parts are orthogonal up to the solve's rounding, |cos| <= 1e-10 between any two (1.2e-11 at most, at 3840 x 2160;
+   2.6e-11 at 7680 x 4320).
    mk_hhd_init(H, nx, ny): nx, ny >= 2 (and their product under 2^31); 0, or -1 (no memory; H is then empty).
    mk_hhd_free.
    mk_hhd_split(H, u, v): u, v nx * ny, index j nx + i (x fastest), any units (pixels per frame, per second); fills H's
    parts gx, gy, rx, ry, hx, hy (the same layout) and phi, psi ((nx + 1) (ny + 1), index j (nx + 1) + i for corner
    (i - 1/2, j - 1/2)). 0, or -1 (H not initialized, a value not finite: every part NaN). Threads (with -fopenmp): the
-   transforms and solves, by columns and rows, the same bits at any thread count.
+   transforms by lines and the solves by modes, in lanes fixed by count, so the same bytes at any thread count.
    mk_hhd_readout(H, cx, cy, R), after a split; (cx, cy) the principal point in pixels (NaN: the frame's centre):
      expand   half the mean divergence of the gradient part over the inner corners: a(x - x0) gives a; an approach at
               speed W to a wall at Z gives W / Z, 1 / the time to contact. Per the field's time unit.
@@ -43,13 +49,17 @@
               pan or tilt adds a near-uniform shift that one view cannot tell from a moved heading, and the read point
               moves with it. NaN when the field has no point to fit (parallel flow, or nothing left once the swirl is
               out).
+     foe_rms  the residual foe was fitted with, as a distance in pixels: the rms, weighted by |v'|^2, of how far each
+              pixel's line along v' passes from foe. Rounding for a translation (and roll) over a wall; any other
+              motion or scene leaves a residual. It measures how well the lines meet, not how far foe is from the
+              heading: a pan's near-uniform part moves foe and leaves no residual (the tests: 40 px moved, 0.1 px
+              rms), as one view cannot tell it from a turned heading. NaN with foe.
      e[3]     the gradient, rotational and harmonic parts' shares of the field's energy (sum |part|^2 / sum |v|^2; they
               add to 1).
    Header only, C23.
-   Experimental: its results may change between releases.
-   Speed: the sine transform of length 2 ny takes its largest prime factor by a direct sum (mk_fftm). On one thread of
-   an x86-64 desktop, 1920 x 1080 (factor 5) splits in 0.18 s, x 1088 (17) in 0.29 s, x 802 (401) in 3.3 s and x 1031
-   (1031) in 10.7 s; 26 common heights from 144 to 4320 (letterboxed 804 and 816 among them) have factors up to 67. */
+   Speed: on one thread of an x86-64 desktop, 1920 x 1080 splits in 0.08 s and 3840 x 2160 in 0.36 s. Every height from
+   2 to 2160 at width 1920 takes within 1.1 times 1080's time a pixel (a height such as 1031, whose 2 ny has a large
+   prime factor, transforms along x instead); a frame awkward both ways, such as 1031 x 1031, about 2.4 times. */
 #ifndef MK_HHD_H
 #define MK_HHD_H
 #include "mk_fft.h"
@@ -62,21 +72,24 @@
 #include <string.h>
 _Static_assert(sizeof(long) == 8, "mk_hhd.h needs LP64: its grid size check multiplies in a long");
 
-/* lanes: buffers fixed by count, not by thread; columns per transform block */
+/* lanes: buffers fixed by count, not by thread; lines per transform block */
 enum { MK_HHD_LANES_ = 16, MK_HHD_COLS_ = 8 };
 
 typedef struct {
     int nx, ny;
     double *gx, *gy, *rx, *ry, *hx, *hy;
     double *phi, *psi;
-    mk_fftm f_;           /* length 2 ny */
+    mk_fftm f_;           /* length 2 nt, nt the transformed axis's pixel count: ny, or nx when tx_ */
+    int tx_;              /* 0: the sine transform along y and the solves along x; 1: the other way round */
     double *zr_, *zi_;    /* (nx - 1) (ny - 1) inner corners: -div then phi; curl then psi */
-    double complex *buf_; /* per lane: MK_HHD_COLS_ columns of 2 ny, then a work line of 2 ny */
-    double *tri_;         /* per lane: a, b, c of nx - 1 */
+    double complex *buf_; /* per lane, lw_ values: MK_HHD_COLS_ lines of 2 nt, a work line of 2 nt, the transform's scratch */
+    size_t lw_;
+    double *tri_;         /* per lane: a, b, c and a gathered line of the solves' length */
 } mk_hhd;
 
 typedef struct {
     double foe[2], expand, rot, trans[2], e[3];
+    double foe_rms; /* the fit's residual: the rms distance in pixels from foe to the pixels' flow lines (NaN with foe) */
 } mk_hhd_read;
 
 static inline void mk_hhd_free(mk_hhd *H)
@@ -88,54 +101,74 @@ static inline int mk_hhd_init(mk_hhd *H, int nx, int ny)
 {
     memset(H, 0, sizeof *H);
     if (nx < 2 || ny < 2 || nx > (1 << 28) || ny > (1 << 27) || (long)(nx + 1) * (ny + 1) > INT_MAX) return -1;
+    /* the axis to transform: nx - 1 lines of 2 ny, or ny - 1 lines of 2 nx when that counts under 0.8 of it: its solves
+       gather their lines, which costs a little more (about 6 % at 1920 x 1080 on an x86-64 desktop) */
+    double cy, cx;
+    mk_fftm_len_(2 * ny, &cy), mk_fftm_len_(2 * nx, &cx);
+    const int tx = (double)(ny - 1) * cx < 0.8 * (double)(nx - 1) * cy;
+    const int nt = tx ? nx : ny, ns = tx ? ny : nx;
     const size_t nc = (size_t)nx * (size_t)ny, nv = (size_t)(nx + 1) * (size_t)(ny + 1), ni = (size_t)(nx - 1) * (size_t)(ny - 1);
+    if (mk_fftm_plan(&H->f_, 2 * nt)) { mk_hhd_free(H); return -1; }
+    H->tx_ = tx, H->lw_ = (size_t)(MK_HHD_COLS_ + 1) * 2 * (size_t)nt + mk_fftm_scratch_(&H->f_);
     H->gx = malloc(sizeof(double) * (6 * nc + 2 * nv));
     H->zr_ = malloc(sizeof(double) * 2 * ni);
-    H->buf_ = malloc(sizeof(double complex) * (size_t)MK_HHD_LANES_ * (MK_HHD_COLS_ + 1) * 2 * (size_t)ny);
-    H->tri_ = malloc(sizeof(double) * (size_t)MK_HHD_LANES_ * 3 * (size_t)(nx - 1));
-    if (!H->gx || !H->zr_ || !H->buf_ || !H->tri_ || mk_fftm_plan(&H->f_, 2 * ny)) { mk_hhd_free(H); return -1; }
+    H->buf_ = malloc(sizeof(double complex) * (size_t)MK_HHD_LANES_ * H->lw_);
+    H->tri_ = malloc(sizeof(double) * (size_t)MK_HHD_LANES_ * 4 * (size_t)(ns - 1));
+    if (!H->gx || !H->zr_ || !H->buf_ || !H->tri_) { mk_hhd_free(H); return -1; }
     H->gy = H->gx + nc, H->rx = H->gy + nc, H->ry = H->rx + nc, H->hx = H->ry + nc, H->hy = H->hx + nc;
     H->phi = H->hy + nc, H->psi = H->phi + nv, H->zi_ = H->zr_ + ni;
     H->nx = nx, H->ny = ny;
     return 0;
 }
-/* the sine transform along y (k = 1 .. ny - 1) of columns a0 .. a1 - 1 of the inner corners, real and imaginary parts
-   at once; times sc */
-static inline void mk_hhd_dst_(mk_hhd *H, int lane, int a0, int a1, double sc)
+/* the sine transform (k = 1 .. nt - 1) of lines i0 .. i1 - 1 of the inner corners along the transformed axis, real and
+   imaginary parts at once; times sc. Line i, point k is at k st + i sl (st, sl: the axes' strides in zr_). */
+static inline void mk_hhd_dst_(mk_hhd *H, int lane, int i0, int i1, double sc)
 {
-    const int Nx = H->nx - 1, ny = H->ny, L = 2 * ny;
-    double complex *col = H->buf_ + (size_t)lane * (MK_HHD_COLS_ + 1) * (size_t)L, *w = col + (size_t)MK_HHD_COLS_ * L;
-    for (int a = a0; a < a1; a++) col[(size_t)(a - a0) * L] = col[(size_t)(a - a0) * L + ny] = 0;
-    for (int b = 1; b < ny; b++) /* each column made odd about 0 and ny */
-        for (int a = a0; a < a1; a++) {
-            const size_t q = (size_t)(b - 1) * Nx + a;
-            double complex *y = col + (size_t)(a - a0) * L;
-            y[b] = CMPLX(H->zr_[q], H->zi_[q]), y[L - b] = CMPLX(-H->zr_[q], -H->zi_[q]);
+    const int nt = H->tx_ ? H->nx : H->ny, L = 2 * nt;
+    const size_t Nx = (size_t)H->nx - 1, st = H->tx_ ? 1 : Nx, sl = H->tx_ ? Nx : 1;
+    double complex *col = H->buf_ + (size_t)lane * H->lw_, *w = col + (size_t)MK_HHD_COLS_ * L, *scr = mk_fftm_scratch_(&H->f_) ? w + L : NULL;
+    for (int i = i0; i < i1; i++) col[(size_t)(i - i0) * L] = col[(size_t)(i - i0) * L + nt] = 0;
+    for (int k = 1; k < nt; k++) /* each line made odd about 0 and nt */
+        for (int i = i0; i < i1; i++) {
+            const size_t q = (size_t)(k - 1) * st + (size_t)i * sl;
+            double complex *y = col + (size_t)(i - i0) * L;
+            y[k] = CMPLX(H->zr_[q], H->zi_[q]), y[L - k] = CMPLX(-H->zr_[q], -H->zi_[q]);
         }
-    for (int a = a0; a < a1; a++) mk_fftm_c(&H->f_, col + (size_t)(a - a0) * L, w, 0);
-    for (int k = 1; k < ny; k++) /* the odd sequence's transform is -2 i times the sine sums */
-        for (int a = a0; a < a1; a++) {
-            const size_t q = (size_t)(k - 1) * Nx + a;
-            const double complex y = col[(size_t)(a - a0) * L + k];
+    for (int i = i0; i < i1; i++) mk_fftm_x_(&H->f_, col + (size_t)(i - i0) * L, w, scr, 0);
+    for (int k = 1; k < nt; k++) /* the odd sequence's transform is -2 i times the sine sums */
+        for (int i = i0; i < i1; i++) {
+            const size_t q = (size_t)(k - 1) * st + (size_t)i * sl;
+            const double complex y = col[(size_t)(i - i0) * L + k];
             H->zr_[q] = -cimag(y) * (sc / 2), H->zi_[q] = creal(y) * (sc / 2);
         }
 }
-/* the tridiagonal solves along x for modes l0 .. l1 - 1 (rows l - 1); 0 or -1 */
+/* the tridiagonal solves along the other axis for modes l0 .. l1 - 1; 0 or -1 */
 static inline int mk_hhd_tri_(mk_hhd *H, int lane, int l0, int l1)
 {
-    const int Nx = H->nx - 1;
-    double *ta = H->tri_ + (size_t)lane * 3 * Nx, *tb = ta + Nx, *tc = tb + Nx;
+    const int nt = H->tx_ ? H->nx : H->ny, Ns = (H->tx_ ? H->ny : H->nx) - 1;
+    const size_t Nx = (size_t)H->nx - 1, st = H->tx_ ? 1 : Nx, sl = H->tx_ ? Nx : 1;
+    double *ta = H->tri_ + (size_t)lane * 4 * (size_t)Ns, *tb = ta + Ns, *tc = tb + Ns, *ln = tc + Ns;
     int bad = 0;
     for (int l = l0; l < l1; l++) {
 #if defined(MK_MUTATE) && MK_MUTATE == 241
-        const double c = cos(MK_FFT_PI * l / H->ny); /* planted fault: the coupling's sign turned */
+        const double c = cos(MK_FFT_PI * l / nt); /* planted fault: the coupling's sign turned */
+#elif defined(MK_MUTATE) && MK_MUTATE == 314
+        const double c = -(double)(float)cos(MK_FFT_PI * l / nt); /* planted fault: the coupling in single precision */
 #else
-        const double c = -cos(MK_FFT_PI * l / H->ny);
+        const double c = -cos(MK_FFT_PI * l / nt);
 #endif
         for (int part = 0; part < 2; part++) {
-            double *row = (part ? H->zi_ : H->zr_) + (size_t)(l - 1) * Nx;
-            for (int i = 0; i < Nx; i++) ta[i] = tc[i] = c, tb[i] = 2;
-            bad |= mk_tridiag(Nx, ta, tb, tc, row, row);
+            double *row = (part ? H->zi_ : H->zr_) + (size_t)(l - 1) * st, *x = sl == 1 ? row : ln;
+            for (int i = 0; i < Ns; i++) ta[i] = tc[i] = c, tb[i] = 2;
+            if (sl != 1)
+                for (int i = 0; i < Ns; i++) ln[i] = row[(size_t)i * sl];
+            bad |= mk_tridiag(Ns, ta, tb, tc, x, x);
+#if defined(MK_MUTATE) && MK_MUTATE == 312
+            if (sl != 1 && !part) /* planted fault: the gathered line of psi not put back */
+#else
+            if (sl != 1)
+#endif
+                for (int i = 0; i < Ns; i++) row[(size_t)i * sl] = ln[i];
         }
     }
     return bad ? -1 : 0;
@@ -143,7 +176,7 @@ static inline int mk_hhd_tri_(mk_hhd *H, int lane, int l0, int l1)
 static inline int mk_hhd_split(mk_hhd *H, const double *u, const double *v)
 {
     if (!H->gx) return -1;
-    const int nx = H->nx, ny = H->ny, Nx = nx - 1, Ny = ny - 1, nv1 = nx + 1;
+    const int nx = H->nx, ny = H->ny, Nx = nx - 1, nv1 = nx + 1, nt = H->tx_ ? nx : ny, Nt = nt - 1, Ns = (H->tx_ ? ny : nx) - 1;
     const size_t nc = (size_t)nx * ny;
     int fin = 1;
     /* -div and curl at the inner corners: cells LL (a-1, b-1), LR (a, b-1), UL (a-1, b), UR (a, b) */
@@ -161,24 +194,29 @@ static inline int mk_hhd_split(mk_hhd *H, const double *u, const double *v)
         }
     for (size_t k = 0; k < nc; k++) fin &= isfinite(u[k]) && isfinite(v[k]);
     if (!fin) goto bad;
-    const int nblk = (Nx + MK_HHD_COLS_ - 1) / MK_HHD_COLS_;
+    const int nblk = (Ns + MK_HHD_COLS_ - 1) / MK_HHD_COLS_;
     int fail[MK_HHD_LANES_] = {0};
     for (int pass = 0; pass < 3; pass++) {
         MK_OMP_(omp parallel for schedule(static))
         for (int lane = 0; lane < MK_HHD_LANES_; lane++) {
-            if (pass == 1) { /* the modes in rows, spread over the lanes */
-                const int per = (Ny + MK_HHD_LANES_ - 1) / MK_HHD_LANES_, l0 = 1 + lane * per, l1 = l0 + per < ny ? l0 + per : ny;
+            if (pass == 1) { /* the modes, spread over the lanes */
+#if defined(MK_MUTATE) && MK_MUTATE == 310
+                /* planted fault: the modes cut by the thread count, each piece's last mode left unsolved */
+                if (lane == 0) MK_PAR_CUT_(Nt, i0, i1, if (mk_hhd_tri_(H, 0, 1 + (int)i0, 1 + (int)i1)) fail[0] = 1);
+                continue;
+#endif
+                const int per = (Nt + MK_HHD_LANES_ - 1) / MK_HHD_LANES_, l0 = 1 + lane * per, l1 = l0 + per < nt ? l0 + per : nt;
                 if (l0 < l1 && mk_hhd_tri_(H, lane, l0, l1)) fail[lane] = 1;
                 continue;
             }
 #if defined(MK_MUTATE) && MK_MUTATE == 242
-            const double sc = pass ? 1.0 / ny : 1; /* planted fault: the inverse scaled by 1 / ny, not 2 / ny */
+            const double sc = pass ? 1.0 / nt : 1; /* planted fault: the inverse scaled by 1 / nt, not 2 / nt */
 #else
-            const double sc = pass ? 2.0 / ny : 1; /* the sine transform twice is ny / 2 times the identity */
+            const double sc = pass ? 2.0 / nt : 1; /* the sine transform twice is nt / 2 times the identity */
 #endif
             for (int k = lane; k < nblk; k += MK_HHD_LANES_) {
-                const int a0 = k * MK_HHD_COLS_, a1 = a0 + MK_HHD_COLS_ < Nx ? a0 + MK_HHD_COLS_ : Nx;
-                mk_hhd_dst_(H, lane, a0, a1, sc);
+                const int i0 = k * MK_HHD_COLS_, i1 = i0 + MK_HHD_COLS_ < Ns ? i0 + MK_HHD_COLS_ : Ns;
+                mk_hhd_dst_(H, lane, i0, i1, sc);
             }
         }
     }
@@ -207,7 +245,12 @@ static inline int mk_hhd_split(mk_hhd *H, const double *u, const double *v)
 #else
             H->rx[c] = sy, H->ry[c] = -sx;
 #endif
+#if defined(MK_MUTATE) && MK_MUTATE == 313
+            const double fx2 = 0.5 * ((f[o + 1] + f[p + 1]) - (f[o] + f[p])); /* planted fault: the rest from a gradient summed another way */
+            H->hx[c] = u[c] - fx2 - H->rx[c], H->hy[c] = v[c] - fy - H->ry[c];
+#else
             H->hx[c] = u[c] - fx - H->rx[c], H->hy[c] = v[c] - fy - H->ry[c];
+#endif
             fin &= isfinite(H->hx[c]) && isfinite(H->hy[c]);
         }
     if (fin) return 0;
@@ -218,7 +261,7 @@ bad:
 }
 static inline void mk_hhd_readout(const mk_hhd *H, double cx, double cy, mk_hhd_read *R)
 {
-    *R = (mk_hhd_read){{NAN, NAN}, NAN, NAN, {NAN, NAN}, {NAN, NAN, NAN}};
+    *R = (mk_hhd_read){{NAN, NAN}, NAN, NAN, {NAN, NAN}, {NAN, NAN, NAN}, NAN};
     if (!H->gx) return;
     const int nx = H->nx, ny = H->ny;
     if (!isfinite(cx)) cx = (nx - 1) / 2.0;
@@ -262,7 +305,24 @@ static inline void mk_hhd_readout(const mk_hhd *H, double cx, double cy, mk_hhd_
         }
     const double det = s11 * s22 - s12 * s12;
     /* a field left with no flow (a pure swirl) has no focus either */
-    if (det > 1e-12 * s11 * s22 && s11 + s22 > 1e-24 * ev)
-        R->foe[0] = cx + (t1 * s22 - t2 * s12) / det, R->foe[1] = cy + (s11 * t2 - s12 * t1) / det;
+    if (!(det > 1e-12 * s11 * s22 && s11 + s22 > 1e-24 * ev)) return;
+    const double fx = (t1 * s22 - t2 * s12) / det, fy = (s11 * t2 - s12 * t1) / det; /* from (cx, cy) */
+    R->foe[0] = cx + fx, R->foe[1] = cy + fy;
+    /* the residual it was fitted with, as a distance: each pixel's line along v' misses foe by |(x - x0) x v'| / |v'|, and
+       the rms of those misses weighted by |v'|^2 is sqrt(sum ((x - x0) x v')^2 / sum |v'|^2) */
+    double rr = 0;
+    for (int j = 0; j < ny; j++)
+        for (int i = 0; i < nx; i++) {
+            const size_t k = (size_t)j * nx + i;
+#if defined(MK_MUTATE) && MK_MUTATE == 311
+            const double x = i - cx, y = j - cy; /* planted fault: the misses measured from the principal point */
+#else
+            const double x = i - cx - fx, y = j - cy - fy;
+#endif
+            const double vx = H->gx[k] + H->rx[k] + H->hx[k] + w * (j - cy), vy = H->gy[k] + H->ry[k] + H->hy[k] - w * (i - cx);
+            const double m = x * vy - y * vx;
+            rr += m * m;
+        }
+    R->foe_rms = sqrt(rr / (s11 + s22));
 }
 #endif

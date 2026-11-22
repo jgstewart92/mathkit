@@ -384,6 +384,38 @@ static void box1(mesh *m, double x, double y, double z, double s, int inward)
     cube(m, x, y, z, s, 1);
     if (inward) for (int t = t0; t < m->nt; t++) { const int a = m->T[3 * t + 1]; m->T[3 * t + 1] = m->T[3 * t + 2], m->T[3 * t + 2] = a; }
 }
+/* the cosine between faces a and b's normals, positions V */
+static double face_cos(const double *V, const int *a, const int *b)
+{
+    double n[2][3];
+    for (int s = 0; s < 2; s++) {
+        const int *q = s ? b : a;
+        const double *p0 = V + 3 * q[0], *p1 = V + 3 * q[1], *p2 = V + 3 * q[2];
+        const double u[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]}, w[3] = {p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
+        n[s][0] = u[1] * w[2] - u[2] * w[1], n[s][1] = u[2] * w[0] - u[0] * w[2], n[s][2] = u[0] * w[1] - u[1] * w[0];
+    }
+    const double l = sqrt((n[0][0] * n[0][0] + n[0][1] * n[0][1] + n[0][2] * n[0][2]) * (n[1][0] * n[1][0] + n[1][1] * n[1][1] + n[1][2] * n[1][2]));
+    return l > 0 ? (n[0][0] * n[1][0] + n[0][1] * n[1][1] + n[0][2] * n[1][2]) / l : 1;
+}
+/* over each pair of faces sharing an edge (brute force): the edges folded over 90 degrees at V, their count (what: 0)
+   and length (what: 1); with V0, only those that met at under 90 degrees at V0 (at 90 or more there: left out) */
+static double folded(const double *V0, const double *V, const int *T, int nt, int what)
+{
+    double s = 0;
+    for (int t = 0; t < nt; t++)
+        for (int u = t + 1; u < nt; u++) {
+            int sh = 0, e[2] = {0, 0};
+            for (int a = 0; a < 3; a++)
+                for (int b = 0; b < 3; b++)
+                    if (T[3 * t + a] == T[3 * u + b] && sh < 2) e[sh++] = T[3 * t + a];
+            if (sh != 2 || !(face_cos(V, T + 3 * t, T + 3 * u) < 0) || (V0 && !(face_cos(V0, T + 3 * t, T + 3 * u) > 1e-9))) continue;
+            const double *p = V + 3 * e[0], *q = V + 3 * e[1];
+            s += what ? sqrt((p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]) + (p[2] - q[2]) * (p[2] - q[2])) : 1;
+        }
+    return s;
+}
+static long new_folds(const double *V0, const double *V, const int *T, int nt) { return (long)folded(V0, V, T, nt, 0); }
+[[maybe_unused]] static double fold_length(const double *V, const int *T, int nt) { return folded(NULL, V, T, nt, 1); }
 /* two meshes as one file, for meshcheck */
 static void writepair(const char *name, const mesh *a, const mesh *b)
 {
@@ -940,6 +972,224 @@ int main(int argc, char **argv)
         rc = mk_sepvol(tb.V, tb.nv, tb.T, tb.nt, NULL, 0, NULL, 0, gap, step, rings, rounds, &r);
         CHECK(rc == 0 && r.status == 0 && r.cross == 0 && r.part_loss > 0 && r.part_loss < 0.1, "twoball, a separation that succeeds: status %d, the most any part lost %.2f %%", r.status, 100 * r.part_loss);
         free(V), free(m.V), free(m.T);
+    }
+
+    /* 22. (held mode) a box 6.05 mm thick and 7.32 mm square (3 x 3 a face), 3.61 mm into a cube 10 mm across
+       (18 x 18 a face), off its middle; gap 0.1 mm, step 0.649 mm, 3 rings, 22 rounds. Pushing out of a part this thick
+       folds the cube's face. The state handed back has no more inside vertices plus crossing pairs than the input, no
+       edge folded over 90 degrees that met at under 90 at the start (the cube's own edges, at 90, may fold further),
+       and the report says what is left */
+    {
+        mesh K = {0};
+        cube(&K, 0, 0, 0, 0.01, 18);
+        const double lo[3] = {0.01 - 3.607e-3, 6.469e-3 - 3.659e-3, 0.005 - 3.659e-3}, hi[3] = {0.01 - 3.607e-3 + 6.048e-3, 6.469e-3 + 3.659e-3, 0.005 + 3.659e-3};
+        mesh R = box(lo, hi, 3);
+        double *K0 = malloc(sizeof(double) * 3 * K.nv);
+        memcpy(K0, K.V, sizeof(double) * 3 * K.nv);
+        const long kin0 = held_inside(K.V, K.nv, &R), kr0 = pair_cross(&K, &R);
+        rc = mk_sepvol(K.V, K.nv, K.T, K.nt, R.V, R.nv, R.T, R.nt, 1e-4, 6.49e-4, 3, 22, &r);
+        const long kin1 = held_inside(K.V, K.nv, &R), kr1 = pair_cross(&K, &R), k1 = own_pairs(K.V, K.T, K.nt, NULL), nf = new_folds(K0, K.V, K.T, K.nt);
+        CHECK(rc == 0 && kin0 > 100 && kr0 > 100 && kin1 + kr1 <= kin0 + kr0 && r.inside + r.cross <= r.inside0 + r.cross0 && r.inside < r.inside0 && r.inside == kin1 && r.cross == kr1, "a thick box 3.6 mm into a cube: never more inside plus crossing than it came in: vertices inside %ld -> %ld, crossing pairs %ld -> %ld (the report: %ld -> %ld, %ld -> %ld)", kin0, kin1, kr0, kr1, r.inside0, r.inside, r.cross0, r.cross);
+        CHECK(rc == 0 && nf == 0 && k1 == 0, "a thick box 3.6 mm into a cube: %ld edges folded over 90 degrees that met at under 90 (the test's count), own crossing pairs %ld", nf, k1);
+        const double f0 = fold_length(K0, K.T, K.nt), f1 = fold_length(K.V, K.T, K.nt);
+        CHECK(fabs(r.fold0 - f0) <= 1e-9 * fmax(f0, f1) && fabs(r.fold1 - f1) <= 1e-9 * fmax(f0, f1) && f1 > 0, "a thick box 3.6 mm into a cube: the report's fold lengths %.4f -> %.4f mm (the test's: %.4f -> %.4f mm)", r.fold0 * 1e3, r.fold1 * 1e3, f0 * 1e3, f1 * 1e3);
+        CHECK(r.inside > 0 && r.cross > 0 && (r.status & MK_SEPVOL_STILL_INSIDE) && (r.status & MK_SEPVOL_STILL_CROSSES) && !(r.status & MK_SEPVOL_PAIRS_ROSE) == !(r.cross > r.cross0), "a thick box 3.6 mm into a cube: vertices (%ld) and pairs (%ld, %ld at the start) left, and the status says so: %d", r.inside, r.cross, r.cross0, r.status);
+        free(K.V), free(K.T), free(R.V), free(R.T), free(K0);
+    }
+    { /* where the push raises the crossing pairs: a box 5.70 mm thick and 7.82 mm square (12 x 12 a face), 4.39 mm into a
+         cube 15 x 15 a face; step 0.846 mm, 1 ring, 25 rounds. The fewest inside vertices plus crossing pairs come with
+         more crossing pairs than the input, and the status says so (the fewest inside vertices alone: 132 -> 30 inside,
+         190 -> 362 crossing pairs, more in sum than the input) */
+        mesh K = {0};
+        cube(&K, 0, 0, 0, 0.01, 15);
+        const double lo[3] = {0.01 - 4.386e-3, 3.977e-3 - 3.912e-3, 0.005 - 3.912e-3}, hi[3] = {0.01 - 4.386e-3 + 5.698e-3, 3.977e-3 + 3.912e-3, 0.005 + 3.912e-3};
+        mesh R = box(lo, hi, 12);
+        const long kin0 = held_inside(K.V, K.nv, &R), kr0 = pair_cross(&K, &R);
+        rc = mk_sepvol(K.V, K.nv, K.T, K.nt, R.V, R.nv, R.T, R.nt, 1e-4, 8.46e-4, 1, 25, &r);
+        const long kin1 = held_inside(K.V, K.nv, &R), kr1 = pair_cross(&K, &R);
+        CHECK(rc == 0 && kin0 > 100 && kin1 + kr1 <= kin0 + kr0 && r.inside + r.cross <= r.inside0 + r.cross0 && kin1 < kin0, "a box 4.4 mm into a cube, the push adding crossing pairs: vertices inside %ld -> %ld, crossing pairs %ld -> %ld (the report: %ld -> %ld, %ld -> %ld)", kin0, kin1, kr0, kr1, r.inside0, r.inside, r.cross0, r.cross);
+        CHECK(r.cross > r.cross0 && (r.status & MK_SEPVOL_PAIRS_ROSE), "a box 4.4 mm into a cube: the crossing pairs rose (%ld -> %ld), and the status says so: %d", r.cross0, r.cross, r.status);
+        free(K.V), free(K.T), free(R.V), free(R.T);
+    }
+    /* 23. (held mode) the moves smoothed in space: a box 5.6 mm thick and 4.7 mm square (2 x 2 a face), 1.5 mm into
+       a cube 10 mm across (19 x 19 a face); gap 0.1 mm, step 0.816 mm, 2 rings, 15 rounds. Each vertex's own push folds
+       the face past 90 degrees, so the guard holds the moves back; smoothed, the patch moves together and clears */
+    {
+        mesh K = {0};
+        cube(&K, 0, 0, 0, 0.01, 19);
+        const double lo[3] = {0.01 - 1.526e-3, 5.018e-3 - 2.329e-3, 0.005 - 2.329e-3}, hi[3] = {0.01 - 1.526e-3 + 5.614e-3, 5.018e-3 + 2.329e-3, 0.005 + 2.329e-3};
+        mesh R = box(lo, hi, 2);
+        double *K0 = malloc(sizeof(double) * 3 * K.nv);
+        memcpy(K0, K.V, sizeof(double) * 3 * K.nv);
+        const long kin0 = held_inside(K.V, K.nv, &R), kr0 = pair_cross(&K, &R);
+        rc = mk_sepvol(K.V, K.nv, K.T, K.nt, R.V, R.nv, R.T, R.nt, 1e-4, 8.16e-4, 2, 15, &r);
+        const long kin1 = held_inside(K.V, K.nv, &R), kr1 = pair_cross(&K, &R), k1 = own_pairs(K.V, K.T, K.nt, NULL), nf = new_folds(K0, K.V, K.T, K.nt);
+        CHECK(rc == 0 && kin0 > 30 && kr0 > 30 && kin1 == 0 && kr1 == 0 && r.inside == 0 && r.cross == 0 && nf == 0 && k1 == 0, "a box 1.5 mm into a cube, the moves smoothed in space: vertices inside %ld -> %ld, crossing pairs %ld -> %ld, %ld new folds over 90 degrees, own crossing pairs %ld; %d rounds", kin0, kin1, kr0, kr1, nf, k1, r.rounds);
+        const double ov = 1.526e-3 * 4.658e-3 * 4.658e-3;
+        CHECK(rc == 0 && r.vol0 - r.vol1 >= ov && r.vol0 - r.vol1 < 3 * ov, "a box 1.5 mm into a cube: volume %.4f -> %.4f ml, %.2f times the overlap (the smoothing spreads the dent; at most 3)", r.vol0 * 1e6, r.vol1 * 1e6, (r.vol0 - r.vol1) / ov);
+        free(K.V), free(K.T), free(R.V), free(R.T), free(K0);
+    }
+    /* 23b. row 11's check on M's own surface, with the moves smoothed: a bar 1.9 mm wide through row 11's slab,
+       its top 0.35 mm above the slab's (the slab jittered by its own xorshift, seed 11). Without the check the slab's
+       top is pushed down through the slab and it loses some 10 % of its volume; with it, under 5 % */
+    {
+        const double lo[3] = {0, 0, 0}, hi[3] = {0.02, 0.02, 0.003}, blo[3] = {0.0101 - 0.00095, -0.005, -0.008}, bhi[3] = {0.0101 + 0.00095, 0.025, 0.00335};
+        mesh S = box(lo, hi, 20), R = box(blo, bhi, 8);
+        unsigned long long g = 11;
+        for (int i = 0; i < 3 * S.nv; i++) {
+            g ^= g << 13, g ^= g >> 7, g ^= g << 17;
+            S.V[i] += 1e-7 * ((double)(g >> 11) * 0x1.0p-52 - 1.0);
+        }
+        const long sin0 = held_inside(S.V, S.nv, &R), sr0 = pair_cross(&S, &R);
+        rc = mk_sepvol(S.V, S.nv, S.T, S.nt, R.V, R.nv, R.T, R.nt, gap, step, rings, rounds, &r);
+        const long s1 = own_pairs(S.V, S.T, S.nt, NULL), sin1 = held_inside(S.V, S.nv, &R), sr1 = pair_cross(&S, &R);
+        CHECK(rc == 0 && sin0 > 100 && s1 == 0 && sin1 + sr1 <= sin0 + sr0 && r.vol1 > 0.95 * r.vol0, "a bar 1.9 mm wide through a slab: its volume %.4f -> %.4f ml (%.2f %%), own crossing pairs %ld, vertices inside the bar %ld -> %ld, crossing pairs %ld -> %ld", r.vol0 * 1e6, r.vol1 * 1e6, 100 * (r.vol1 / r.vol0 - 1), s1, sin0, sin1, sr0, sr1);
+        free(S.V), free(S.T), free(R.V), free(R.T);
+    }
+    /* 24. several held meshes in one call, each kept separate. A ball 5 mm across (60 x 30) against two boxes that
+       overlap each other, one through its +x side and one through its +y side, and an open box near its -x side. Their
+       union crosses itself, so mk_sepvol refuses it (-2); mk_sepvol_multi takes the two boxes, each its own inside, and
+       leaves the open one out with its report saying why */
+    {
+        mesh M = {0};
+        const double c0[3] = {0, 0, 0};
+        lat_sphere(&M, 60, 30, c0);
+        for (int i = 0; i < 3 * M.nv; i++) M.V[i] *= 5e-3;
+        const double alo[3] = {3.5e-3, -2e-3, -3e-3}, ahi[3] = {9e-3, 4.5e-3, 3e-3}, blo[3] = {-2e-3, 3.8e-3, -3e-3}, bhi[3] = {4.5e-3, 9e-3, 3e-3};
+        const double clo[3] = {-9e-3, -2e-3, -2e-3}, chi[3] = {-4.2e-3, 2e-3, 2e-3};
+        mesh A = box(alo, ahi, 8), Bx = box(blo, bhi, 8), C = box(clo, chi, 4), U = {0};
+        C.nt--; /* open: a face short */
+        const double z[3] = {0, 0, 0};
+        append(&U, &A, z), append(&U, &Bx, z);
+        double *M0 = malloc(sizeof(double) * 3 * M.nv), *W = malloc(sizeof(double) * 3 * M.nv), *A0 = malloc(sizeof(double) * 3 * A.nv), *B0 = malloc(sizeof(double) * 3 * Bx.nv);
+        int *MT0 = malloc(sizeof(int) * 3 * M.nt);
+        memcpy(M0, M.V, sizeof(double) * 3 * M.nv), memcpy(W, M.V, sizeof(double) * 3 * M.nv), memcpy(MT0, M.T, sizeof(int) * 3 * M.nt);
+        memcpy(A0, A.V, sizeof(double) * 3 * A.nv), memcpy(B0, Bx.V, sizeof(double) * 3 * Bx.nv);
+        rc = mk_sepvol(W, M.nv, M.T, M.nt, U.V, U.nv, U.T, U.nt, 1e-4, 2.5e-4, 3, 30, &r);
+        CHECK(rc == -2 && (r.status & MK_SEPVOL_HELD_CROSSES) && !memcmp(W, M0, sizeof(double) * 3 * M.nv), "the two boxes as one held mesh: refused (%d, status %d, %ld crossing pairs of its own)", rc, r.status, r.held_cross);
+        const long ia0 = held_inside(M.V, M.nv, &A), ib0 = held_inside(M.V, M.nv, &Bx), ca0 = pair_cross(&M, &A), cb0 = pair_cross(&M, &Bx);
+        const double *HV[3] = {A.V, Bx.V, C.V};
+        const int *HT[3] = {A.T, Bx.T, C.T}, hnv[3] = {A.nv, Bx.nv, C.nv}, hnt[3] = {A.nt, Bx.nt, C.nt};
+        mk_sepvol_report hr[3];
+        rc = mk_sepvol_multi(M.V, M.nv, M.T, M.nt, 3, HV, hnv, HT, hnt, 1e-4, 2.5e-4, 3, 30, &r, hr);
+        const long ia1 = held_inside(M.V, M.nv, &A), ib1 = held_inside(M.V, M.nv, &Bx), ca1 = pair_cross(&M, &A), cb1 = pair_cross(&M, &Bx), k1 = own_pairs(M.V, M.T, M.nt, NULL);
+        CHECK(rc == 0 && ia0 > 50 && ib0 > 50 && ia1 == 0 && ib1 == 0 && ca1 == 0 && cb1 == 0 && k1 == 0, "the ball out of both boxes in one call: inside %ld, %ld -> %ld, %ld; crossing pairs %ld, %ld -> %ld, %ld (the test's counts); own crossing pairs %ld", ia0, ib0, ia1, ib1, ca0, cb0, ca1, cb1, k1);
+        CHECK(hr[0].inside0 == ia0 && hr[1].inside0 == ib0 && hr[0].cross0 == ca0 && hr[1].cross0 == cb0 && hr[0].inside == 0 && hr[1].inside == 0 && hr[0].cross == 0 && hr[1].cross == 0 && r.inside0 == ia0 + ib0 && r.cross0 == ca0 + cb0 && r.inside == 0 && r.cross == 0 && hr[0].rounds > 0 && hr[1].rounds > 0, "each box's report: inside %ld -> %ld and %ld -> %ld, crossing pairs %ld -> %ld and %ld -> %ld, rounds %d and %d; summed %ld -> %ld, %ld -> %ld", hr[0].inside0, hr[0].inside, hr[1].inside0, hr[1].inside, hr[0].cross0, hr[0].cross, hr[1].cross0, hr[1].cross, hr[0].rounds, hr[1].rounds, r.inside0, r.inside, r.cross0, r.cross);
+        CHECK(hr[2].status == MK_SEPVOL_HELD_OPEN && hr[2].held_open > 0 && hr[2].rounds == 0 && (r.status & MK_SEPVOL_HELD_OPEN) && !(r.status & ~MK_SEPVOL_HELD_OPEN), "the open box left out: its status %d (%ld open edges), the call's %d", hr[2].status, hr[2].held_open, r.status);
+        CHECK(!memcmp(A0, A.V, sizeof(double) * 3 * A.nv) && !memcmp(B0, Bx.V, sizeof(double) * 3 * Bx.nv) && !memcmp(MT0, M.T, sizeof(int) * 3 * M.nt) && r.vol1 < r.vol0 && r.vol1 > 0.8 * r.vol0 && r.self0 == 0 && r.self1 == 0, "the boxes unchanged byte for byte, the ball's faces too; its volume %.4f -> %.4f ml (%.2f %%), own pairs %ld -> %ld", r.vol0 * 1e6, r.vol1 * 1e6, 100 * (r.vol1 / r.vol0 - 1), r.self0, r.self1);
+        /* refusals: no held mesh, a NULL one, and every one left out */
+        memcpy(W, M.V, sizeof(double) * 3 * M.nv);
+        const double *HN[1] = {NULL};
+        const int nn = mk_sepvol_multi(W, M.nv, M.T, M.nt, 0, HV, hnv, HT, hnt, 1e-4, 2.5e-4, 3, 30, &r, hr) == -1 && mk_sepvol_multi(W, M.nv, M.T, M.nt, 1, HN, hnv, HT, hnt, 1e-4, 2.5e-4, 3, 30, &r, hr) == -1 &&
+                       mk_sepvol_multi(W, M.nv, M.T, M.nt, 2, HV, hnv, HT, hnt, 1e-4, 0, 3, 30, &r, hr) == -1;
+        rc = mk_sepvol_multi(W, M.nv, M.T, M.nt, 1, HV + 2, hnv + 2, HT + 2, hnt + 2, 1e-4, 2.5e-4, 3, 30, &r, hr);
+        CHECK(nn && rc == -2 && hr[0].status == MK_SEPVOL_HELD_OPEN && !memcmp(W, M.V, sizeof(double) * 3 * M.nv), "mk_sepvol_multi refuses no held mesh, a NULL one and step 0 (-1), and returns -2 with M unchanged when every held mesh is left out (status %d)", hr[0].status);
+        free(M.V), free(M.T), free(A.V), free(A.T), free(Bx.V), free(Bx.T), free(C.V), free(C.T), free(U.V), free(U.T), free(M0), free(W), free(A0), free(B0), free(MT0);
+    }
+    /* 25. a push out of one held mesh can take M into another: a cube 10 mm across (17 x 17 a face), a box 3.44
+       mm thick 3.16 mm into its +x face (5.23 mm square, 7 x 7 a face) and one 2.98 mm thick 3.76 mm in (6.86 mm square,
+       8 x 8 a face) beside it, overlapping it; step 0.648 mm, 2 rings, 4 rounds. Each push sinks the face further into
+       the other box; the state handed back has no more inside vertices plus crossing pairs, summed over both, than the
+       start (the last state: 394 -> 513), and the reports agree with the test's counts */
+    {
+        mesh K = {0};
+        cube(&K, 0, 0, 0, 0.01, 17);
+        const double alo[3] = {0.01 - 3.157e-3, 6.447e-3 - 2.6155e-3, 4.905e-3 - 2.6155e-3}, ahi[3] = {0.01 - 3.157e-3 + 3.438e-3, 6.447e-3 + 2.6155e-3, 4.905e-3 + 2.6155e-3};
+        const double blo[3] = {0.01 - 3.758e-3, 5.830e-3 - 3.4295e-3, 7.246e-3 - 3.4295e-3}, bhi[3] = {0.01 - 3.758e-3 + 2.975e-3, 5.830e-3 + 3.4295e-3, 7.246e-3 + 3.4295e-3};
+        mesh A = box(alo, ahi, 7), Bx = box(blo, bhi, 8);
+        const double *HV[2] = {A.V, Bx.V};
+        const int *HT[2] = {A.T, Bx.T}, hnv[2] = {A.nv, Bx.nv}, hnt[2] = {A.nt, Bx.nt};
+        const long ia0 = held_inside(K.V, K.nv, &A), ib0 = held_inside(K.V, K.nv, &Bx), ca0 = pair_cross(&K, &A), cb0 = pair_cross(&K, &Bx);
+        mk_sepvol_report hr[2];
+        rc = mk_sepvol_multi(K.V, K.nv, K.T, K.nt, 2, HV, hnv, HT, hnt, 1e-4, 6.48e-4, 2, 4, &r, hr);
+        const long ia1 = held_inside(K.V, K.nv, &A), ib1 = held_inside(K.V, K.nv, &Bx), ca1 = pair_cross(&K, &A), cb1 = pair_cross(&K, &Bx);
+        CHECK(rc == 0 && ia0 > 20 && ib0 > 20 && ia1 + ib1 + ca1 + cb1 <= ia0 + ib0 + ca0 + cb0 && hr[0].inside == ia1 && hr[1].inside == ib1 && hr[0].cross == ca1 && hr[1].cross == cb1 && r.inside + r.cross <= r.inside0 + r.cross0, "two held boxes beside each other: inside %ld, %ld -> %ld, %ld; crossing pairs %ld, %ld -> %ld, %ld (the test's counts, the reports' the same); summed %ld -> %ld", ia0, ib0, ia1, ib1, ca0, cb0, ca1, cb1, ia0 + ib0 + ca0 + cb0, ia1 + ib1 + ca1 + cb1);
+        CHECK(!(r.status & MK_SEPVOL_PAIRS_ROSE) == !(r.cross > r.cross0) && !(hr[0].status & MK_SEPVOL_PAIRS_ROSE) == !(ca1 > ca0) && !(hr[1].status & MK_SEPVOL_PAIRS_ROSE) == !(cb1 > cb0), "two held boxes: MK_SEPVOL_PAIRS_ROSE where the crossing pairs rose: the call's %d, each box's %d and %d", (r.status & MK_SEPVOL_PAIRS_ROSE) != 0, (hr[0].status & MK_SEPVOL_PAIRS_ROSE) != 0, (hr[1].status & MK_SEPVOL_PAIRS_ROSE) != 0);
+        free(K.V), free(K.T), free(A.V), free(A.T), free(Bx.V), free(Bx.T);
+    }
+    /* 26. no memory, held mode and several held meshes: as row 13, each allocation of a call failing in turn. A
+       cube 4 x 4 a face against two boxes through its +x face, 3 rounds; mk_sepvol with the first (its smoothing in
+       space and its folds allocate too), then mk_sepvol_multi with both: -1, V as it came in, the reports zeroed */
+    {
+        mesh m = {0};
+        cube(&m, 0, 0, 0, 0.01, 4);
+        const double alo[3] = {0.0092, 0.001, 0.001}, ahi[3] = {0.012, 0.004, 0.009}, blo[3] = {0.0094, 0.006, 0.001}, bhi[3] = {0.012, 0.009, 0.009};
+        mesh A = box(alo, ahi, 3), Bx = box(blo, bhi, 3);
+        double *m0 = malloc(sizeof(double) * 3 * m.nv);
+        memcpy(m0, m.V, sizeof(double) * 3 * m.nv);
+        const double *HV[2] = {A.V, Bx.V};
+        const int *HT[2] = {A.T, Bx.T}, hnv[2] = {A.nv, Bx.nv}, hnt[2] = {A.nt, Bx.nt};
+        const mk_sepvol_report zero = {0};
+        mk_sepvol_report hr[2];
+        long nalloc[2], nok[2] = {0, 0}, moved[2];
+        for (int f = 0; f < 2; f++) {
+            memcpy(m.V, m0, sizeof(double) * 3 * m.nv);
+            t_fi_at = LONG_MAX, t_fi_n = 0;
+            rc = f ? mk_sepvol_multi(m.V, m.nv, m.T, m.nt, 2, HV, hnv, HT, hnt, gap, step, rings, 3, &r, hr) : mk_sepvol(m.V, m.nv, m.T, m.nt, A.V, A.nv, A.T, A.nt, gap, step, rings, 3, &r);
+            nalloc[f] = rc == 0 ? t_fi_n : -1, moved[f] = r.moved;
+            for (long k = 0; k < nalloc[f]; k++) {
+                memcpy(m.V, m0, sizeof(double) * 3 * m.nv);
+                memset(&r, 0x5A, sizeof r), memset(hr, 0x5A, sizeof hr);
+                t_fi_at = k, t_fi_n = 0;
+                const int rk = f ? mk_sepvol_multi(m.V, m.nv, m.T, m.nt, 2, HV, hnv, HT, hnt, gap, step, rings, 3, &r, hr) : mk_sepvol(m.V, m.nv, m.T, m.nt, A.V, A.nv, A.T, A.nt, gap, step, rings, 3, &r);
+                nok[f] += rk == -1 && !memcmp(m.V, m0, sizeof(double) * 3 * m.nv) && !memcmp(&r, &zero, sizeof r) && (!f || (!memcmp(hr, &zero, sizeof zero) && !memcmp(hr + 1, &zero, sizeof zero)));
+            }
+            t_fi_at = -1;
+        }
+        CHECK(nalloc[0] > 20 && nalloc[1] > nalloc[0] && moved[0] > 0 && moved[1] > 0 && nok[0] == nalloc[0] && nok[1] == nalloc[1], "allocation failures, held mode: %ld of mk_sepvol's %ld and %ld of mk_sepvol_multi's %ld return -1 with V exactly as it came in and the reports zeroed (without failures %ld and %ld vertices moved)", nok[0], nalloc[0], nok[1], nalloc[1], moved[0], moved[1]);
+        free(m.V), free(m.T), free(m0), free(A.V), free(A.T), free(Bx.V), free(Bx.T);
+    }
+    /* 27. the volume given back where there is room: ballB pushed out of held ballA lost volume; mk_sepvol_restore
+       moves its vertices 1 mm or more from ballA out along their normals toward the volume it had. Nothing comes nearer
+       ballA than 0.5 mm, and nothing crosses */
+    {
+        mesh a = readobj("test/data/sepvol_ballA.obj"), b = readobj("test/data/sepvol_ballB.obj");
+        rc = mk_sepvol(b.V, b.nv, b.T, b.nt, a.V, a.nv, a.T, a.nt, gap, step, rings, rounds, &r);
+        const double v0 = r.vol0, lost = r.vol0 - r.vol1, depth = 1e-3;
+        double *b0 = malloc(sizeof(double) * 3 * b.nv);
+        memcpy(b0, b.V, sizeof(double) * 3 * b.nv);
+        const double *HV[1] = {a.V};
+        const int *HT[1] = {a.T}, hnv[1] = {a.nv}, hnt[1] = {a.nt};
+        const int rr = mk_sepvol_restore(b.V, b.nv, b.T, b.nt, 1, HV, hnv, HT, hnt, v0, depth, &r);
+        double dmin = INFINITY; /* the moved vertices' distance from ballA, before their move */
+        for (int i = 0; i < b.nv; i++) {
+            if (!memcmp(b.V + 3 * i, b0 + 3 * i, sizeof(double) * 3)) continue;
+            for (int u = 0; u < a.nt; u++) {
+                double w[3], q[3];
+                dmin = fmin(dmin, mk_closest_pt_tri(b0 + 3 * i, a.V + 3 * a.T[3 * u], a.V + 3 * a.T[3 * u + 1], a.V + 3 * a.T[3 * u + 2], w, q));
+            }
+        }
+        dmin = sqrt(dmin);
+        const long in1 = held_inside(b.V, b.nv, &a), c1 = pair_cross(&b, &a), k1 = own_pairs(b.V, b.T, b.nt, NULL), nf = new_folds(b0, b.V, b.T, b.nt);
+        CHECK(rc == 0 && rr == 0 && lost > 0 && fabs(r.vol1 - v0) < 0.05 * lost && r.moved > 0 && dmin >= depth, "ballB's volume given back: %.4f ml lost in the push, %.4f ml short after (%d steps, %ld vertices moved, the nearest %.3f mm from ballA)", lost * 1e6, (v0 - r.vol1) * 1e6, r.rounds, r.moved, dmin * 1e3);
+        CHECK(rr == 0 && in1 == 0 && c1 == 0 && k1 == 0 && nf == 0 && r.inside == 0 && r.cross == 0 && r.self1 == 0, "ballB after: vertices inside ballA %ld, crossing pairs %ld, own %ld, new folds over 90 degrees %ld (the report: %ld, %ld, %ld)", in1, c1, k1, nf, r.inside, r.cross, r.self1);
+        free(a.V), free(a.T), free(b.V), free(b.T), free(b0);
+    }
+    { /* where the corners are far from a held part but a face is not: a cube one square a face, a plate 2 mm square and
+         0.1 mm thick 0.3 mm off the middle of its +x face. Its corners are 4 mm and more from the plate;
+         given 20 % more volume, that face would sweep over the plate: its corners stay, the other four move */
+        mesh k = {0}, p = {0};
+        box1(&k, 0, 0, 0, 0.01, 0);
+        const double lo[3] = {0.0103, 0.004, 0.004}, hi[3] = {0.0104, 0.006, 0.006};
+        p = box(lo, hi, 2);
+        double *k0 = malloc(sizeof(double) * 3 * k.nv);
+        memcpy(k0, k.V, sizeof(double) * 3 * k.nv);
+        const double *HV[1] = {p.V};
+        const int *HT[1] = {p.T}, hnv[1] = {p.nv}, hnt[1] = {p.nt};
+        rc = mk_sepvol_restore(k.V, k.nv, k.T, k.nt, 1, HV, hnv, HT, hnt, 1.2e-6, 1e-3, &r);
+        int still = 0; /* the +x face's corners where they were */
+        for (int i = 0; i < k.nv; i++) still += k0[3 * i] > 0.005 && !memcmp(k0 + 3 * i, k.V + 3 * i, sizeof(double) * 3);
+        CHECK(rc == 0 && pair_cross(&k, &p) == 0 && r.cross == 0 && r.cross0 == 0 && still == 4 && fabs(r.vol1 - 1.2e-6) < 1e-3 * 1.2e-6 && r.self1 == 0, "a face that would go through a held plate: %ld crossing pairs, its %d corners where they were, the rest moved: volume %.4f -> %.4f ml (1.2 wanted; %d steps)", pair_cross(&k, &p), still, r.vol0 * 1e6, r.vol1 * 1e6, r.rounds);
+        memcpy(k.V, k0, sizeof(double) * 3 * k.nv);
+        /* refusals: depth not positive, the volume not finite, a held mesh open */
+        const int n1 = mk_sepvol_restore(k.V, k.nv, k.T, k.nt, 1, HV, hnv, HT, hnt, 1.2e-6, 0, &r) == -1 && mk_sepvol_restore(k.V, k.nv, k.T, k.nt, 1, HV, hnv, HT, hnt, NAN, 1e-3, &r) == -1;
+        p.nt--;
+        const int hnt2[1] = {p.nt};
+        rc = mk_sepvol_restore(k.V, k.nv, k.T, k.nt, 1, HV, hnv, HT, hnt2, 1.2e-6, 1e-3, &r);
+        CHECK(n1 && rc == -2 && (r.status & MK_SEPVOL_HELD_OPEN) && !memcmp(k0, k.V, sizeof(double) * 3 * k.nv), "mk_sepvol_restore refuses depth 0 and a NaN volume (-1), and an open held mesh (%d, status %d), the cube unchanged", rc, r.status);
+        rc = mk_sepvol_restore(k.V, k.nv, k.T, k.nt, 0, NULL, NULL, NULL, NULL, 1.2e-6, 1e-3, &r);
+        CHECK(rc == 0 && fabs(r.vol1 - 1.2e-6) < 1e-3 * 1.2e-6 && r.self1 == 0, "the cube, no held mesh: %.4f -> %.4f ml (1.2 wanted) in %d steps", r.vol0 * 1e6, r.vol1 * 1e6, r.rounds);
+        free(k.V), free(k.T), free(p.V), free(p.T), free(k0);
     }
 
     /* 5. refusals: V as it came in */

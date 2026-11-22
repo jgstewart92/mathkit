@@ -4,10 +4,14 @@
    hit; a hit at the same parameter as the last, a shared edge or vertex, counts once); a line is inside between an odd
    and the next even crossing. The shared length, and each mesh's own, are summed times h^2. A line with an odd count of
    either mesh (a tangent touch, a hole), or more than MK_OVL_CAP crossings, is left out and counted. The lattice spans
-   the two meshes' common box, or both boxes with MK_OVL_ALL (needed for only_a, only_b and the volumes). Accuracy: a
-   smooth solid's volume to O(h^2) relative, with an error of about the boundary length times h in a cross-section when
-   a face lies along the line (a box aligned with the axis). Header only, C23.
-   Experimental: its results may change between releases. */
+   the two meshes' common box, and only lines that cross B count; with MK_OVL_ALL it spans both boxes and every line
+   that crosses either mesh counts. So vol_a, vol_b, only_a and only_b are the meshes' whole volumes only with
+   MK_OVL_ALL: without it they hold only what lies on B's lines inside the common box (two unit spheres 1.2 apart: 0.28
+   and 0.38 of each), and both is the same either way. Accuracy: a smooth solid's volume to O(h^2) relative, with an
+   error of about the boundary length times h in a cross-section when a face lies along the line (a box aligned with the
+   axis). Measured: the lens of two unit spheres at h 0.02 within 0.08 %; with MK_OVL_ALL each sphere's volume within
+   0.015 % of its mesh's signed volume, and a gut wall's (1690 ml) and an airway wall's (139 ml) at h 0.2 mm within
+   0.010 % and 0.038 %. Header only, C23. */
 #ifndef MK_OVL_H
 #define MK_OVL_H
 #include "mk_geom.h"
@@ -18,10 +22,10 @@
 #define MK_OVL_CAP 4096
 typedef struct {
     double both;           /* the volume inside both */
-    /* each mesh's volume by the same columns (MK_OVL_ALL; else only on lines that cross B, each mesh's whole length
-       along them) */
+    /* each mesh's volume by the same columns: whole only with MK_OVL_ALL; without it, each mesh's length along the lines
+       that cross B inside the common box, a part of its volume */
     double vol_a, vol_b;
-    double only_a, only_b; /* inside one and not the other */
+    double only_a, only_b; /* inside one and not the other (whole, likewise, only with MK_OVL_ALL) */
     long cols, odd;        /* lines that cross a mesh (without MK_OVL_ALL: that cross B); those left out */
 } mk_ovl_report;
 
@@ -118,7 +122,11 @@ static inline int mk_ovl_bvh(const mk_bvh *A, const mk_bvh *B, double h, int axi
             o[u] = (i + 0.5371) * h, o[w] = (j + 0.5213) * h, o[axis] = za;
 #endif
             const int nb = mk_ovl_hits_(B, o, axis, len, tb, MK_OVL_CAP);
+#if defined(MK_MUTATE) && MK_MUTATE == 371
+            if (!nb) continue; /* planted fault: lines that miss B left out even with MK_OVL_ALL */
+#else
             if (!nb && !(flags & MK_OVL_ALL)) continue;
+#endif
             const int na = mk_ovl_hits_(A, o, axis, len, ta, MK_OVL_CAP);
             if (!na && !nb) continue;
             cols++;

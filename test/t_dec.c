@@ -190,6 +190,8 @@ int main(int argc, char **argv)
         int bad = 0;
         for (int t = 0; t < 3 * nto; t++) bad += !al[To[t]];
         CHECK(ok && !bad && r.nt == nto && r.nv == nto / 2 + 2, "kept vertices are the input's own, the faces use only them (%d of %d)", r.nv, S.nv);
+        const double v0 = tm_volume(S.V, S.T, S.nt), v1 = tm_volume(S.V, To, nto);
+        CHECK(ok && fabs(v1 - v0) <= 0.005 * r.area0[0], "the volume moves %.3g, %.3f of the bound times the area (%.5f -> %.5f)", v1 - v0, fabs(v1 - v0) / (0.005 * r.area0[0]), v0, v1);
         tm_write("dec_sphere", S.V, S.nv, To, nto, NULL);
         /* the target, and held vertices */
         mk_dec_report r2;
@@ -342,6 +344,79 @@ int main(int argc, char **argv)
               r.clean_after, r.relaxed, r.left_after, G.nt, nto, r.maxown);
         free(keep), free(al), free(To), tm_free(&G);
     }
+    { /* two groups on a sphere (a face's centroid above or below z = 0), their shared vertices marked as a seam (2), as a
+         caller marks a group border: each result face is mapped to the input face it is, whose surviving corners it keeps in
+         their places; each group stays on its side of the seam band and keeps its area */
+        tm_mesh S = {0};
+        tm_sphere(&S, 1, c0, 5);
+        unsigned char *grp = malloc((size_t)S.nt), *keep = calloc((size_t)S.nv, 1), *seen = calloc((size_t)S.nv, 1), *al = malloc((size_t)S.nv);
+        for (int t = 0; t < S.nt; t++) grp[t] = S.V[3 * S.T[3 * t] + 2] + S.V[3 * S.T[3 * t + 1] + 2] + S.V[3 * S.T[3 * t + 2] + 2] > 0;
+        for (int t = 0; t < S.nt; t++)
+            for (int k = 0; k < 3; k++) seen[S.T[3 * t + k]] |= (unsigned char)(1 << grp[t]);
+        double band = 0, a0[2] = {0, 0}, a1[2] = {0, 0};
+        for (int i = 0; i < S.nv; i++)
+            if (seen[i] == 3) keep[i] = 2, band = fmax(band, fabs(S.V[3 * i + 2]));
+        mk_dec_defaults(&o, 1), o.dist = 0.005, o.maxedge = 0, o.minalt = 1e-6, o.keep = keep;
+        int *To = malloc(sizeof(int) * 3 * (size_t)S.nt), *fm = malloc(sizeof(int) * (size_t)S.nt), nto = 0;
+        const int e = mk_decimate_map(S.V, S.nv, S.T, S.nt, &o, al, To, &nto, fm, &r);
+        long range = 0, twice = 0, moved = 0, side = 0, checked = 0;
+        char *used = calloc((size_t)S.nt, 1);
+        for (int i = 0; i < nto && !e; i++) {
+            const int f = fm[i];
+            if (f < 0 || f >= S.nt) { range++; continue; }
+            twice += used[f]++ > 0;
+            int kept = 0;
+            for (int k = 0; k < 3; k++) {
+                const int x = S.T[3 * f + k];
+                if (!al[To[3 * i + k]] || (al[x] && To[3 * i + k] != x)) moved++;
+                kept += al[x];
+            }
+            checked += kept > 0;
+            const double *p = S.V + 3 * To[3 * i], *q = S.V + 3 * To[3 * i + 1], *s = S.V + 3 * To[3 * i + 2], z = (p[2] + q[2] + s[2]) / 3;
+            side += grp[f] ? z < -band : z > band;
+            const double u1[3] = {q[0] - p[0], q[1] - p[1], q[2] - p[2]}, u2[3] = {s[0] - p[0], s[1] - p[1], s[2] - p[2]};
+            const double n[3] = {u1[1] * u2[2] - u1[2] * u2[1], u1[2] * u2[0] - u1[0] * u2[2], u1[0] * u2[1] - u1[1] * u2[0]};
+            a1[grp[f]] += 0.5 * sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        }
+        for (int t = 0; t < S.nt; t++) {
+            const double *p = S.V + 3 * S.T[3 * t], *q = S.V + 3 * S.T[3 * t + 1], *s = S.V + 3 * S.T[3 * t + 2];
+            const double u1[3] = {q[0] - p[0], q[1] - p[1], q[2] - p[2]}, u2[3] = {s[0] - p[0], s[1] - p[1], s[2] - p[2]};
+            const double n[3] = {u1[1] * u2[2] - u1[2] * u2[1], u1[2] * u2[0] - u1[0] * u2[2], u1[0] * u2[1] - u1[1] * u2[0]};
+            a0[grp[t]] += 0.5 * sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        }
+        CHECK(e == 0 && nto == r.nt && r.nv < S.nv / 4 && range == 0 && twice == 0 && moved == 0 && checked > nto / 20 && side == 0 && fabs(a1[0] / a0[0] - 1) < 0.01 && fabs(a1[1] / a0[1] - 1) < 0.01,
+              "a two-group sphere, the seam marked: %d -> %d faces, each mapped to its input face (%ld out of range, %ld twice, %ld corners not the face's own, %ld faces with a kept corner to check), %ld off their group's side of the seam band (%.3f); group areas %.4f -> %.4f and %.4f -> %.4f",
+              S.nt, nto, range, twice, moved, checked, side, band, a0[0], a1[0], a0[1], a1[1]);
+        int *To2 = malloc(sizeof(int) * 3 * (size_t)S.nt), nto2 = 0;
+        mk_dec_report r2;
+        const int e2 = mk_decimate(S.V, S.nv, S.T, S.nt, &o, al, To2, &nto2, &r2);
+        CHECK(e2 == 0 && nto2 == nto && !memcmp(To, To2, sizeof(int) * 3 * (size_t)nto), "mk_decimate gives mk_decimate_map's faces without the map (%d and %d)", nto2, nto);
+        free(grp), free(keep), free(seen), free(al), free(To), free(To2), free(fm), free(used), tm_free(&S);
+    }
+    { /* a tent of three faces over a sliver hole in a held plane (the sliver 1e-6 high): taking its apex onto any
+         corner leaves the sliver, under minalt (1e-3) and lower than any face of the apex's, so nothing is taken */
+        tm_mesh G = {0};
+        const double eps = 1e-6;
+        const int a = tm_vert(&G, 0, 0, 0), b = tm_vert(&G, 2, 0, 0), v = tm_vert(&G, 1, eps, 0), w1 = tm_vert(&G, 1, -1, 0), w2 = tm_vert(&G, 1, 1, 0);
+        const int u = tm_vert(&G, 1, eps / 2, 0.5);
+        tm_tri(&G, a, w1, b), tm_tri(&G, a, v, w2), tm_tri(&G, v, b, w2), tm_tri(&G, a, b, u), tm_tri(&G, b, v, u), tm_tri(&G, v, a, u);
+        unsigned char keep[6], al[6];
+        for (int i = 0; i < 6; i++) keep[i] = i != u;
+        mk_dec_defaults(&o, 1), o.dist = 1, o.maxedge = 0, o.minangle = 0, o.turn = -1, o.minalt = 1e-3, o.clean = 0, o.keep = keep;
+        int To[18], nto = 0;
+        const int e = mk_decimate(G.V, G.nv, G.T, G.nt, &o, al, To, &nto, &r);
+        double low = INFINITY;
+        for (int t = 0; t < nto && !e; t++) {
+            const double *p = G.V + 3 * To[3 * t], *q = G.V + 3 * To[3 * t + 1], *s = G.V + 3 * To[3 * t + 2];
+            const double u1[3] = {q[0] - p[0], q[1] - p[1], q[2] - p[2]}, u2[3] = {s[0] - p[0], s[1] - p[1], s[2] - p[2]}, u3[3] = {s[0] - q[0], s[1] - q[1], s[2] - q[2]};
+            const double n[3] = {u1[1] * u2[2] - u1[2] * u2[1], u1[2] * u2[0] - u1[0] * u2[2], u1[0] * u2[1] - u1[1] * u2[0]};
+            const double L = sqrt(fmax(u1[0] * u1[0] + u1[1] * u1[1] + u1[2] * u1[2], fmax(u2[0] * u2[0] + u2[1] * u2[1] + u2[2] * u2[2], u3[0] * u3[0] + u3[1] * u3[1] + u3[2] * u3[2])));
+            low = fmin(low, sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) / L);
+        }
+        CHECK(e == 0 && low >= 1e-3 && al[u] && nto == 6, "a tent over a 1e-6 sliver hole, all else held, minalt 1e-3: apex %s, %d faces, the lowest %.3g high over its longest edge; %ld collapses refused as low",
+              al[u] ? "kept" : "taken", nto, low, r.refused[8]);
+        tm_free(&G);
+    }
     {
         double V[12] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
         int T[12] = {0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 3, 2}, Tb[3] = {0, 1, 4}, Tr[3] = {0, 1, 1}, To[12], nto;
@@ -375,14 +450,12 @@ int main(int argc, char **argv)
         int OF[24] = {0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5}, nb[MK_DEC_MAXN];
         mk_dec_ c = {0};
         c.P = OV, c.nv = 6, c.nt = 8, c.nreg = 1, c.relax = 1, c.F = OF;
-        c.VT = t_gd_calloc(6, sizeof *c.VT), c.NVT = t_gd_calloc(6, sizeof *c.NVT), c.CVT = t_gd_calloc(6, sizeof *c.CVT);
+        c.NVT = t_gd_calloc(6, sizeof *c.NVT), c.CVT = t_gd_calloc(6, sizeof *c.CVT);
         c.MARK = t_gd_calloc(6, sizeof *c.MARK), c.deadv = t_gd_calloc(6, 1), c.bnd = t_gd_calloc(6, 1), c.N0 = t_gd_calloc(18, sizeof *c.N0);
-        for (int t = 0; t < 8; t++)
-            for (int k = 0; k < 3; k++) mk_dec_fan_add_(&c, OF[3 * t + k], t);
+        mk_dec_fans_(&c);
         const int ok = !c.oom && mk_dec_cheap_(&c, 0, 4), n = mk_dec_nbrs_(&c, 4, nb);
         CHECK(ok && n == 4, "an octahedron's edge passes the link test (%d), and its end's next neighbour list holds all %d of 4", ok, n);
-        for (int i = 0; i < 6; i++) t_gd_free(c.VT[i]);
-        t_gd_free(c.VT), t_gd_free(c.NVT), t_gd_free(c.CVT), t_gd_free(c.MARK), t_gd_free(c.deadv), t_gd_free(c.bnd), t_gd_free(c.N0);
+        t_gd_free(c.VA), t_gd_free(c.VO), t_gd_free(c.NVT), t_gd_free(c.CVT), t_gd_free(c.MARK), t_gd_free(c.deadv), t_gd_free(c.bnd), t_gd_free(c.N0);
     }
     CHECK(t_guard_bad == 0, "every block the decimation allocated kept its guard bytes: %ld written over", t_guard_bad);
     return wrong;

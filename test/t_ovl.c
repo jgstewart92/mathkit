@@ -17,6 +17,10 @@ int main(void)
           100 * (r.both / lens - 1), r.cols, r.odd);
     e = mk_overlap_volume(A.V, A.nv, A.T, A.nt, B.V, B.nv, B.T, B.nt, h, 2, MK_OVL_ALL, &ra);
     CHECK(e == 0 && fabs(ra.vol_a / va - 1) < 2e-3 && ra.both == r.both, "the sphere's own volume by columns %.5f against its mesh %.5f; the lens the same over both boxes", ra.vol_a, va);
+    const double vb = tm_volume(B.V, B.T, B.nt);
+    CHECK(e == 0 && fabs(ra.vol_a / va - 1) < 5e-4 && fabs(ra.vol_b / vb - 1) < 5e-4 && r.vol_a < 0.5 * va && r.vol_b < 0.5 * vb,
+          "whole volumes with MK_OVL_ALL, h R / 50: A %.5f and B %.5f against their meshes' %.5f and %.5f (%+.4f %%, %+.4f %%, within 0.05 %%); without it, B's lines in the common box only: %.3f and %.3f of them",
+          ra.vol_a, ra.vol_b, va, vb, 100 * (ra.vol_a / va - 1), 100 * (ra.vol_b / vb - 1), r.vol_a / va, r.vol_b / vb);
     CHECK(fabs(ra.only_a + ra.both - ra.vol_a) <= 1e-12 * ra.vol_a && fabs(ra.only_b + ra.both - ra.vol_b) <= 1e-12 * ra.vol_b && fabs(ra.only_a - ra.only_b) < 1e-3 * ra.only_a,
           "only_a + both = vol_a, only_b + both = vol_b; the pair symmetric (only_a %.5f, only_b %.5f)", ra.only_a, ra.only_b);
     mk_overlap_volume(A.V, A.nv, A.T, A.nt, B.V, B.nv, B.T, B.nt, h, 0, 0, &r1), mk_overlap_volume(A.V, A.nv, A.T, A.nt, B.V, B.nv, B.T, B.nt, h, 1, 0, &r2);

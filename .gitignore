@@ -2,3 +2,7 @@ build/
 NOTES.md
 SOURCES.md
 signatures.tsv
+golden/
+COMPARE.txt
+MANIFEST.sha256
+SHIP.txt

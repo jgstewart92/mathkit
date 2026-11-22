@@ -1,8 +1,8 @@
 /* Regression rows for edge cases found by fuzzing the mesh headers (mk_ovl, mk_dec, mk_graft, mk_sdf, mk_geom):
    points far from the origin, extreme spacings, overflow and underflow of h * h, non-finite input, a failing
    allocation. Each row is the exact call that exposed the fault. The calls that can hang (the far boxes) or run long
-   (the large triangle) run in a child process with a limit of T_LIM seconds of CPU, so that a hang is a FAIL row here
-   and not the driver's timeout. Those run first: a child must not inherit a parent that has already used OpenMP. */
+   (the large triangle) run in a child process under a limit of CPU seconds (T_LIM, D2_LIM), so that a hang is a FAIL
+   row here and not the driver's timeout. Those run first: a child must not inherit a parent that has already used OpenMP. */
 #define _GNU_SOURCE /* fork, setitimer */
 #include <float.h>
 #include <signal.h>
@@ -49,7 +49,8 @@ static void t_al_free(void *p)
 #include "../include/mk_sdf.h"
 #include "t.h"
 
-enum { T_LIM = 5 };
+enum { T_LIM = 5, D2_LIM = 1 }; /* D2_LIM: the large triangle's row; it returns in about 0.01 s, and entered in every cell
+                                    of its box in about 5 s on a fast x86-64 desktop, so 5 s would not tell them apart */
 /* fn(io) in a child limited to sec seconds of CPU (and a wall limit, should it sleep); io comes back through a pipe. 0: it returned,
    1: over the limit, 2: it died otherwise */
 static int t_limited(void (*fn)(void *), void *io, size_t nio, int sec)
@@ -172,11 +173,11 @@ int main(void)
         t = t_limited(ovl_run, &d, sizeof d, T_LIM);
         CHECK(t == 0 && d.e == 0 && near(d.r.both, 0x1p-144, 0.07), "overlap volume: two boxes 2^-48 wide at (1, 1, 1), h = 2^-54: %s, both %.6g (2^-144 = %.6g)", t ? "no return in the limit" : "returned", d.r.both, 0x1p-144);
     }
-    { /* the large triangle beside the fine grid must finish within T_LIM s of CPU; entering it in every grid cell of
+    { /* the large triangle beside the fine grid must finish within D2_LIM s of CPU; entering it in every grid cell of
          its bounding box does not */
         dec_out o = {-9, -1};
-        const int t = t_limited(d2_run, &o, sizeof o, T_LIM);
-        CHECK(t == 0 && o.rc == 0 && o.nv > 0, "decimate: 1800 triangles of 1 mm beside one triangle 128 cells a side: %s in %d s of CPU, rc %d, %d vertices left", t ? "no return" : "returned", T_LIM, o.rc, o.nv);
+        const int t = t_limited(d2_run, &o, sizeof o, D2_LIM);
+        CHECK(t == 0 && o.rc == 0 && o.nv > 0, "decimate: 1800 triangles of 1 mm beside one triangle 128 cells a side: %s in %d s of CPU, rc %d, %d vertices left", t ? "no return" : "returned", D2_LIM, o.rc, o.nv);
     }
     { /* far along the line axis the pad must not vanish, and the face at the lines' origin must count */
         const double lo[3] = {0, 0, 0x1p60}, hi[3] = {1, 1, 0x1p60 + 0x1p24};

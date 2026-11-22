@@ -1,7 +1,9 @@
 /* mk_hhd on known cases: a pinhole camera's motion field, from Longuet-Higgins and Prazdny 1980 (The interpretation of
    a moving retinal image, Proc. R. Soc. Lond. B 208), over a plane facing the camera, a tilted plane and a box room;
-   then the split's own properties: three parts orthogonal and adding up, each part's divergence and curl, a field built
-   from known potentials split back into them, the refusals, and 1920 x 1080. The camera's numbers are arbitrary but
+   the focus fit's residual; then the split's own properties: three parts orthogonal and adding up, each part's divergence
+   and curl, a field built from known potentials split back into them (along either axis, and through Bluestein's
+   transform), the refusals, the sum within 4 ulps and |cos| within 1e-10 at sizes from 2 x 2 to 3840 x 2160 (with
+   OpenMP, the same bytes at 1 to 16 threads), and 1920 x 1080. The camera's numbers are arbitrary but
    plausible: a 256 x 144 frame, focal length 1000 px (a 14.6 x 8.2 degree view) or 200 px for the room (65 x 39
    degrees), walking forward at 2 m/s toward a wall 4 m off, heading 0.1 m/s right and 0.05 m/s up, rolling at 0.8 rad/s
    (a quick head tilt), panning (yaw) at 0.02 rad/s. The camera frame: x right, y down (image rows), z forward; the flow
@@ -11,6 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 typedef struct {
     double f, U, V, W, A, B, C; /* focal length (px); translation (m/s); angular velocity about x, y, z: pitch, yaw, roll (rad/s) */
@@ -78,6 +83,22 @@ static double now(void)
     timespec_get(&t, TIME_UTC);
     return (double)t.tv_sec + 1e-9 * (double)t.tv_nsec;
 }
+/* the focus fit's residual recomputed from the parts: sqrt(sum ((x - x0) v'y - (y - y0) v'x)^2 / sum |v'|^2), v' the
+   field less a swirl at rate rot about the frame's centre, (fx, fy) the focus from the centre */
+static double foe_rms_ref(const mk_hhd *H, double rot, double fx, double fy)
+{
+    const double cx = (H->nx - 1) / 2.0, cy = (H->ny - 1) / 2.0;
+    double num = 0, den = 0;
+    for (int j = 0; j < H->ny; j++)
+        for (int i = 0; i < H->nx; i++) {
+            const size_t k = (size_t)j * H->nx + i;
+            const double x = i - cx, y = j - cy;
+            const double vx = H->gx[k] + H->rx[k] + H->hx[k] + rot * y, vy = H->gy[k] + H->ry[k] + H->hy[k] - rot * x;
+            const double m = (x - fx) * vy - (y - fy) * vx;
+            num += m * m, den += vx * vx + vy * vy;
+        }
+    return sqrt(num / den);
+}
 enum { NX = 256, NY = 144 };
 static double U[NX * NY], V[NX * NY];
 /* split a camera's flow; the readout about the frame's centre */
@@ -107,6 +128,8 @@ int main(void)
           "plane: the harmonic part's mean is the heading's sideways flow -f (U, V) / Z = (%.1f, %.1f) px/s (read %.6f, %.6f)", -base.f * base.U / base.Z0,
           -base.f * base.V / base.Z0, R.trans[0], R.trans[1]);
     CHECK(orth(&H, U, V) < 1e-12, "plane: the three parts orthogonal (worst |<a, b>| / |v|^2 %.2g)", orth(&H, U, V));
+    const double q0 = foe_rms_ref(&H, R.rot, R.foe[0], R.foe[1]);
+    CHECK(R.foe_rms < 1e-6 && fabs(R.foe_rms - q0) < 1e-9, "plane, forward + roll: the focus fit's residual foe_rms %.2g px, its lines all through the focus (the test's own sum %.2g)", R.foe_rms, q0);
     {
         const mk_hhd_read R0 = R;
         cam c = base;
@@ -122,6 +145,10 @@ int main(void)
         const double mx2 = (NX * NX - 1) / 12.0; /* the mean x^2 over the frame's pixel centres */
         CHECK(fabs(R.trans[0] - R0.trans[0] + c.f * B * (1 + mx2 / (c.f * c.f))) < 1e-9 && fabs(R.trans[1] - R0.trans[1]) < 1e-9,
               "plane + yaw: the pan lands in the harmonic part's mean, -f B (1 + <x^2> / f^2) = %.4f px/s (read %.4f)", -c.f * B * (1 + mx2 / (c.f * c.f)), R.trans[0] - R0.trans[0]);
+        const double q = foe_rms_ref(&H, R.rot, R.foe[0], R.foe[1]);
+        CHECK(R.foe_rms > 0.05 && fabs(R.foe_rms - q) < 1e-9 * R.foe_rms,
+              "plane + yaw: a residual foe_rms %.3f px against %.2g px without the pan, while the focus moved %.0f px: the pan's near-uniform part leaves none, only its second-order part (the test's own sum %.3f)",
+              R.foe_rms, R0.foe_rms, sh, q);
     }
     /* where each motion lands, alone: the parts' shares of its energy */
     double froll[3], ffwd[3];
@@ -180,9 +207,10 @@ int main(void)
     mk_hhd_free(&H);
 
     /* known potentials split back: phi0, psi0 random at the inner corners, h0 = a uniform shift + a pure strain (x, -y) / 100;
-       37 x 23 takes the transform's direct-sum radix (2 ny = 46 = 2 23) */
-    static const int sz[2][2] = {{37, 23}, {NX, NY}};
-    for (int t = 0; t < 2; t++) {
+       37 x 23 takes a pass of radix 23 by its pairs (2 ny = 46), 64 x 37 its transforms along x (2 nx = 128) and its
+       solves along y, 67 x 71 Bluestein's chirp z (2 ny = 142 = 2 71) */
+    static const int sz[4][2] = {{37, 23}, {64, 37}, {67, 71}, {NX, NY}};
+    for (int t = 0; t < 4; t++) {
         const int nx = sz[t][0], ny = sz[t][1], nv1 = nx + 1;
         mk_hhd K;
         if (mk_hhd_init(&K, nx, ny)) { CHECK(0, "mk_hhd_init %d x %d", nx, ny); continue; }
@@ -222,6 +250,72 @@ int main(void)
         u[17] = NAN;
         CHECK(mk_hhd_split(&K, u, v) == -1 && isnan(K.gx[0]) && isnan(K.hy[47]) && isnan(K.phi[0]), "mk_hhd_split refuses a NaN in the field, every part NaN");
         mk_hhd_free(&K);
+    }
+    /* from 2 x 2 to 3840 x 2160, three fields (uniform random, the camera's forward + roll over the wall, smooth waves):
+       the parts add up to the field within 4 ulps of each pixel's largest value, summed g + r + h; |cos| between any two
+       parts within 1e-10; with OpenMP, the same bytes at 1, 2, 3, 7 and 16 threads */
+    {
+        static const int fs[][2] = {{2, 2}, {3, 2}, {2, 3}, {37, 23}, {64, 37}, {67, 71}, {256, 144}, {1920, 1031}, {1920, 1080}, {3840, 2160}};
+        static const char *kn[3] = {"random", "camera", "smooth"};
+        enum { NF = sizeof fs / sizeof fs[0] };
+        double su = 0, cm = 0;
+        int sw = 0, cw = 0, ckw = 0, okp = 1;
+#ifdef _OPENMP
+        int same = 1, nth = 0;
+#endif
+        for (int t = 0; t < NF; t++)
+            for (int kind = 0; kind < 3; kind++) {
+                const int nx = fs[t][0], ny = fs[t][1];
+                const size_t n = (size_t)nx * ny;
+                double *u = malloc(sizeof(double) * n), *v = malloc(sizeof(double) * n);
+                if (kind == 1) flow(&base, nx, ny, u, v);
+                else
+                    for (int j = 0; j < ny; j++)
+                        for (int i = 0; i < nx; i++)
+                            u[(size_t)j * nx + i] = kind ? sin(0.01 * i) + 0.3 * cos(0.02 * j) : t_rand(), v[(size_t)j * nx + i] = kind ? cos(0.0091 * i + 0.01 * j) : t_rand();
+                mk_hhd K;
+                if (mk_hhd_init(&K, nx, ny) || mk_hhd_split(&K, u, v)) {
+                    okp = 0, mk_hhd_free(&K), free(u), free(v);
+                    continue;
+                }
+                double gg = 0, rr = 0, hh = 0, gr = 0, gh = 0, rh = 0;
+                for (size_t k = 0; k < n; k++) {
+                    const double p[2][4] = {{u[k], K.gx[k], K.rx[k], K.hx[k]}, {v[k], K.gy[k], K.ry[k], K.hy[k]}};
+                    for (int d = 0; d < 2; d++) {
+                        const double m = fmax(fmax(fabs(p[d][0]), fabs(p[d][1])), fmax(fabs(p[d][2]), fabs(p[d][3])));
+                        int e;
+                        frexp(m, &e);
+                        const double s = m > 0 ? fabs(p[d][1] + p[d][2] + p[d][3] - p[d][0]) / ldexp(1.0, e - 53) : 0;
+                        if (s > su) su = s, sw = t;
+                    }
+                    gg += K.gx[k] * K.gx[k] + K.gy[k] * K.gy[k], rr += K.rx[k] * K.rx[k] + K.ry[k] * K.ry[k], hh += K.hx[k] * K.hx[k] + K.hy[k] * K.hy[k];
+                    gr += K.gx[k] * K.rx[k] + K.gy[k] * K.ry[k], gh += K.gx[k] * K.hx[k] + K.gy[k] * K.hy[k], rh += K.rx[k] * K.hx[k] + K.ry[k] * K.hy[k];
+                }
+                const double c3[3] = {gg > 0 && rr > 0 ? fabs(gr) / sqrt(gg * rr) : 0, gg > 0 && hh > 0 ? fabs(gh) / sqrt(gg * hh) : 0, rr > 0 && hh > 0 ? fabs(rh) / sqrt(rr * hh) : 0};
+                for (int q = 0; q < 3; q++)
+                    if (!(c3[q] <= cm)) cm = c3[q], cw = t, ckw = kind;
+#ifdef _OPENMP
+                if (kind == 0) { /* the bytes at other thread counts against these */
+                    static const int th[4] = {2, 3, 7, 16};
+                    const size_t nb = sizeof(double) * (6 * n + 2 * (size_t)(nx + 1) * (ny + 1));
+                    double *ref = malloc(nb);
+                    const int t0 = omp_get_max_threads();
+                    memcpy(ref, K.gx, nb);
+                    for (int q = 0; q < 4; q++) {
+                        omp_set_num_threads(th[q]);
+                        same &= !mk_hhd_split(&K, u, v) && !memcmp(ref, K.gx, nb);
+                    }
+                    omp_set_num_threads(t0), free(ref), nth++;
+                }
+#endif
+                mk_hhd_free(&K), free(u), free(v);
+            }
+        CHECK(okp && su <= 4, "%d sizes from 2 x 2 to 3840 x 2160, three fields: g + r + h is the field within 4 ulps of each pixel's largest value (worst %.2f, at %d x %d)", NF, su, fs[sw][0],
+              fs[sw][1]);
+        CHECK(okp && cm <= 1e-10, "the same splits: |cos| between any two parts <= 1e-10 (worst %.2g, at %d x %d, the %s field)", cm, fs[cw][0], fs[cw][1], kn[ckw]);
+#ifdef _OPENMP
+        CHECK(okp && same, "the same sizes, random field: the same bytes at 1, 2, 3, 7 and 16 threads (%d sizes)", nth);
+#endif
     }
     /* 1920 x 1080: random flow, orthogonal parts, the time */
     {

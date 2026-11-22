@@ -1,5 +1,6 @@
 /* mathkit: parts of closed outward triangle meshes that sink into each other, moved apart by volume, the mesh kept as
-   it is (the same vertices in the same order, the same faces). One call, mk_sepvol, with a report. Header only, C23.
+   it is (the same vertices in the same order, the same faces). mk_sepvol, with a report; mk_sepvol_multi for several
+   held meshes in one call, mk_sepvol_restore to give volume back after a push. Header only, C23.
    Two modes. Single (HV NULL): one mesh M whose parts overlap (toes pressed together, two balls sunk into each other).
    A vertex is inside another part when a point just inside it is covered at least twice: the winding number there over
    1 (on a closed mesh the clean rays' facings summed, on any other mk_winding_number). Parity does not decide it: a
@@ -29,31 +30,43 @@
       moves together instead of tearing. They spread `rings` rings to the vertices that did not move (half their
       neighbours' mean a ring, so a patch moves, not a spike), and no vertex moves outward along its own normal: that
       part is removed, so nothing grows into a third part. Near another part's edge, smoothing turns a push part way
-      toward the other face's (up to 34 degrees off its own face's normal on two cubes).
+      toward the other face's (up to 34 degrees off its own face's normal on two cubes). In held mode the moves are then
+      smoothed in space, before that last rule: each vertex within 3 sigma of a moving one takes
+      the mean of the moves of every vertex of M within 3 sigma, moving or not and whatever part it is on, weighted by a
+      Gaussian of the distance; sigma is MK_SEPVOL_SIGMA times the larger of step and M's mean edge. The move is
+      smoothed, not the shape: a patch dents as a whole instead of creasing, and pieces close in space but far apart on
+      the mesh move alike. A mean is no longer than its longest move, so step still bounds a move.
    4. No move may make M cross itself. The round's moves are tried together; a face that would cross one of M's own
       faces it did not cross at the round's start (any of M's faces in held mode; one of its own part's in single mode,
       where faces of two parts crossing is what is being undone) has its moving corners' moves halved, up to
       MK_SEPVOL_HALVE times, then rolled back (refused), until no such pair is left. Pairs that crossed before are left
-      as they are: an input that crosses itself is reported (MK_SEPVOL_SELF_CROSSES) and never made worse. The guard
+      as they are: an input that crosses itself is reported (MK_SEPVOL_SELF_CROSSES) and never made worse. In held mode
+      a face also may not fold over 90 degrees against a neighbour across an edge that it met at under 90 at the round's
+      start (an edge at 90 or more, as on a cube, is left as it is): faces that share a corner are never a crossing pair,
+      and a face turned over onto its neighbour reads, just inside it, as outside the mesh. So every edge folded over 90
+      degrees at the end was at 90 or more at the start (rep->fold0, fold1: the length of those over 90). The guard
       holds for the doubles handed back; faces it let come within a rounding of each other can cross once the
       coordinates are written with fewer digits, so write them with %.17g. Steps 3 and 4 work together: on a surface
       crumpled at the edge's scale, unsmoothed moves of half an edge fold it into crossing pairs, and the guard alone
       then stalls.
-   mk_sepvol hands back the state with the fewest inside vertices plus crossing pairs it measured, the later on a tie: a
-   push the guard stalls can end worse than a round before it, and then the input or an earlier round is returned.
+   mk_sepvol hands back the state it measured with the fewest inside vertices plus crossing pairs (the input is one, so
+   the sum never ends above the input's): a push the guard stalls can end worse than a round before it, and then the
+   input or an earlier round comes back. Of states with the same sum the earliest, a later one being only more squeezed;
+   once nothing is left, the latest (near pairs further apart). A push can trade one count for the other: when the
+   crossing pairs end above the input's, MK_SEPVOL_PAIRS_ROSE says so. MK_SEPVOL_STILL_INSIDE and
+   MK_SEPVOL_STILL_CROSSES say what is left.
    Rounds repeat until no vertex is inside, no faces cross and none are near, or `rounds` is spent. A run also ends when
-   a round's moves are all refused, after MK_SEPVOL_STALL rounds without a better state, or when a part of a closed M
+   a round's moves are all refused, after MK_SEPVOL_STALL rounds without fewer in sum, or when a part of a closed M
    has lost more than MK_SEPVOL_CRUSH of its volume while vertices are inside or pairs cross (MK_SEPVOL_CRUSHED; the
    best state before that is handed back). Some crossings no vertex move can clear: two long bars crossed like an X have
-   no vertex inside each other, and step 2 only squeezes them. Whenever pairs are left at the end,
-   MK_SEPVOL_STILL_CROSSES says so.
+   no vertex inside each other, and step 2 only squeezes them. mk_sepvol_multi takes several held meshes in one call.
    The held mesh must define inside and outside: closed, every edge of two faces running it opposite ways, no crossing
    pairs, positive volume, and each connected part wound outward unless it lies inside another part, where it is a
    cavity (a hollow solid). Otherwise mk_sepvol returns -2 with the report's status and held_ fields saying why.
    No vertex moves more than step in a round, so none more than rounds times step in all. Lengths are in the caller's
    unit (gap and step in it). mk_closest_pt_tri's face weights can be thousands of ulps off on a triangle of aspect 1e5
    (about 1e-12 of the triangle's size), far under any gap, so this cannot change a push.
-   Experimental: its results may change between releases. Single-threaded. */
+   Single-threaded. */
 #ifndef MK_SEPVOL_H
 #define MK_SEPVOL_H
 #include "mk_geom.h"
@@ -64,7 +77,7 @@
 #define MK_SEPVOL_HALVE 4 /* halvings of a move that would make M cross itself, before it is refused */
 #endif
 #ifndef MK_SEPVOL_STALL
-#define MK_SEPVOL_STALL 8 /* rounds with no fewer inside vertices plus crossing pairs before the run ends */
+#define MK_SEPVOL_STALL 8 /* rounds with no fewer inside vertices plus crossing pairs, summed, before the run ends */
 #endif
 #ifndef MK_SEPVOL_SMOOTH
 #define MK_SEPVOL_SMOOTH 2 /* passes turning each push toward its pushed neighbours' mean direction (step 3) */
@@ -77,6 +90,10 @@
 #define MK_SEPVOL_CRUSH 0.35 /* the share of a part's volume a run may take while vertices are inside or pairs cross.
                                 Any double expression, read at each call; 1 or more turns the stop off */
 #endif
+#ifndef MK_SEPVOL_SIGMA
+#define MK_SEPVOL_SIGMA 1.0 /* held mode, step 3: the moves smoothed in space by a Gaussian of sigma this times the larger of
+                               step and M's mean edge; 0 turns it off. Any double expression, read at each call */
+#endif
 /* the report's status bits. The held ones make mk_sepvol return -2 without moving anything. */
 #define MK_SEPVOL_HELD_OPEN 1     /* the held mesh has edges not shared by exactly two faces (holes, or 3+ faces) */
 #define MK_SEPVOL_HELD_FLIPPED 2  /* its faces disagree on their facing (an edge run one way by both), a part is wound
@@ -85,6 +102,9 @@
 #define MK_SEPVOL_SELF_CROSSES 8  /* M crossed itself at the start (see self0): it ran, and never added to them */
 #define MK_SEPVOL_STILL_CROSSES 16 /* faces still cross in the state handed back (rep->cross): parts not separated */
 #define MK_SEPVOL_CRUSHED 32      /* stopped: going on would have taken more than MK_SEPVOL_CRUSH of a part */
+#define MK_SEPVOL_STILL_INSIDE 64 /* vertices are still inside in the state handed back (rep->inside) */
+#define MK_SEPVOL_PAIRS_ROSE 128  /* the state handed back has more crossing pairs than the input (rep->cross > cross0),
+                                     though inside vertices plus crossing pairs are no more */
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -109,6 +129,8 @@ typedef struct {
     double held_vol;   /* its enclosed volume (signed) */
     long held_inward;  /* the held mesh's parts wound inward with no other part around them (MK_SEPVOL_HELD_FLIPPED) */
     double part_loss;  /* the largest share of a part's volume lost in the state handed back (0 when M is not closed) */
+    double fold0, fold1; /* the length of M's edges folded over 90 degrees (its two faces' normals more than 90 degrees apart),
+                            before and after, in the caller's unit */
 } mk_sepvol_report;
 
 static inline double mk_sepvol_volume_(const double *V, const int *T, int nt)
@@ -437,10 +459,12 @@ static inline int mk_sepvol_heldcheck_(const double *HV, const int *HT, int hnt,
 /* step 4: the moves D tried together (s[i] = 1 for each moving vertex, 0 otherwise; V the positions at the round's
    start, B M's tree over positions each within grow of V's). A face that would cross one of M's faces it did not cross
    at the start (with part: only one of its own part's) halves its moving corners' moves, MK_SEPVOL_HALVE times, then
-   refuses them (lvl[i] > MK_SEPVOL_HALVE), until no such pair is left. Vn: the positions after. 0, or -1 for no
-   memory. */
+   refuses them (lvl[i] > MK_SEPVOL_HALVE), until no such pair is left. So does a face that would fold over 90 degrees
+   against a neighbour across an edge (nb: the faces across each face's three edges, -1 for none) it met at under 90
+   degrees at the start (an edge at 90 or more is left as it is): two faces that share a corner are never a crossing
+   pair, and a face turned over onto its neighbour reads, just inside it, as outside the mesh. Vn: the positions after. 0, or -1 for no memory. */
 static inline int mk_sepvol_guard_(const double *V, double *Vn, const double *D, int nv, const int *T, int nt, const mk_bvh *B, double grow,
-                                   const int *part, double *s, unsigned char *lvl, char *ch, char *bad)
+                                   const int *part, const int *nb, double *s, unsigned char *lvl, char *ch, char *bad)
 {
     double maxm = 0;
     for (int i = 0; i < nv; i++) {
@@ -479,6 +503,25 @@ static inline int mk_sepvol_guard_(const double *V, double *Vn, const double *D,
                 }
                 nbad++;
             }
+#if !(defined(MK_MUTATE) && MK_MUTATE == 343) /* 343: folds against a neighbour let through */
+            for (int k = 0; nb && k < 3; k++) {
+                const int u = nb[3 * (size_t)t + k];
+                if (u < 0) continue;
+                const int *Y = T + 3 * (size_t)u;
+                double a[3], b[3];
+                mk_sepvol_fnormal_(Vn, X, a), mk_sepvol_fnormal_(Vn, Y, b);
+                if (!(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] < 0)) continue;
+                mk_sepvol_fnormal_(V, X, a), mk_sepvol_fnormal_(V, Y, b);
+                if (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] < 1e-9) continue; /* 90 degrees or more at the start: left as it is */
+                for (int c = 0; c < 3; c++) {
+                    if (s[X[c]] > 0) bad[X[c]] = 1;
+                    if (s[Y[c]] > 0) bad[Y[c]] = 1;
+                }
+                nbad++;
+            }
+#else
+            (void)nb;
+#endif
         }
 #if defined(MK_MUTATE) && MK_MUTATE == 156
         nbad = 0; /* 156: no guard, every move whole */
@@ -518,6 +561,129 @@ static inline void mk_sepvol_smooth_(double *D, const char *fix, int nv, const i
             if (l1 > 0) for (int c = 0; c < 3; c++) e[c] = x[c] * sqrt(l0 / l1);
         }
     }
+}
+
+/* a grid of cells R across over V: cell q's vertices are a list in its bucket (head[hn], hn a power of 2; next[nv]) */
+static inline void mk_sepvol_cell_(const double *p, const double *lo, double R, long long *c)
+{
+    for (int k = 0; k < 3; k++) {
+        const double q = floor((p[k] - lo[k]) / R);
+        c[k] = q < 0x1p52 ? (long long)q : (1LL << 52); /* far points share the last cell: only the distance test decides */
+    }
+}
+static inline int mk_sepvol_bucket_(const long long *c, int hn)
+{
+    const uint64_t h = (uint64_t)c[0] * 0x9E3779B97F4A7C15u ^ (uint64_t)c[1] * 0xC2B2AE3D27D4EB4Fu ^ (uint64_t)c[2] * 0x165667B19E3779F9u;
+    return (int)((h ^ h >> 29) & (uint64_t)(hn - 1));
+}
+/* the distinct buckets of the 27 cells round p's: their count, into b[27] */
+static inline int mk_sepvol_near_(const double *p, const double *lo, double R, int hn, int *b)
+{
+    long long c[3], q[3];
+    mk_sepvol_cell_(p, lo, R, c);
+    int n = 0;
+    for (int dx = -1; dx <= 1; dx++)
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dz = -1; dz <= 1; dz++) {
+                q[0] = c[0] + dx, q[1] = c[1] + dy, q[2] = c[2] + dz;
+                const int h = mk_sepvol_bucket_(q, hn);
+                int seen = 0;
+                for (int i = 0; i < n && !seen; i++) seen = b[i] == h;
+                if (!seen) b[n++] = h;
+            }
+    return n;
+}
+/* step 3 in held mode: the round's moves D smoothed in space: each vertex within 3 sigma of a
+   moving one takes the mean of the moves of every vertex of M within 3 sigma, moving or not, weighted by a Gaussian of
+   their distance (sigma), whatever part they are on, so pieces close in space move together however far apart they are
+   on the mesh. A mean is no longer than the longest move in it, so no move grows past step. V the positions; head[hn]
+   (hn a power of 2 >= nv) and next[nv] the grid; acc[3 nv] scratch, tch[nv] marks. */
+static inline void mk_sepvol_gauss_(const double *V, int nv, double *D, double sigma, int *head, int *next, int hn, double *acc, char *tch)
+{
+    if (nv < 1) return;
+    const double R = 3 * sigma, R2 = R * R, k = -0.5 / (sigma * sigma);
+    double lo[3] = {INFINITY, INFINITY, INFINITY};
+    for (int i = 0; i < nv; i++) for (int c = 0; c < 3; c++) lo[c] = fmin(lo[c], V[3 * (size_t)i + c]);
+    for (int h = 0; h < hn; h++) head[h] = -1;
+    for (int i = nv - 1; i >= 0; i--) { /* each list in index order */
+        long long c[3];
+        mk_sepvol_cell_(V + 3 * (size_t)i, lo, R, c);
+        const int h = mk_sepvol_bucket_(c, hn);
+        next[i] = head[h], head[h] = i;
+    }
+    memset(acc, 0, sizeof *acc * 3 * (size_t)nv), memset(tch, 0, (size_t)nv);
+    int b[27];
+    for (int j = 0; j < nv; j++) { /* each move spread over its neighbours */
+        const double *e = D + 3 * (size_t)j, *p = V + 3 * (size_t)j;
+        if (e[0] == 0 && e[1] == 0 && e[2] == 0) continue;
+        const int nb = mk_sepvol_near_(p, lo, R, hn, b);
+        for (int q = 0; q < nb; q++)
+            for (int i = head[b[q]]; i >= 0; i = next[i]) {
+                const double *x = V + 3 * (size_t)i, r2 = (x[0] - p[0]) * (x[0] - p[0]) + (x[1] - p[1]) * (x[1] - p[1]) + (x[2] - p[2]) * (x[2] - p[2]);
+                if (!(r2 <= R2)) continue;
+                const double w = exp(k * r2);
+                for (int c = 0; c < 3; c++) acc[3 * (size_t)i + c] += w * e[c];
+                tch[i] = 1;
+            }
+    }
+    for (int i = 0; i < nv; i++) { /* over the weights of every vertex near it */
+        if (!tch[i]) continue;
+        const double *p = V + 3 * (size_t)i;
+        double ws = 0;
+        const int nb = mk_sepvol_near_(p, lo, R, hn, b);
+        for (int q = 0; q < nb; q++)
+            for (int j = head[b[q]]; j >= 0; j = next[j]) {
+                const double *x = V + 3 * (size_t)j, r2 = (x[0] - p[0]) * (x[0] - p[0]) + (x[1] - p[1]) * (x[1] - p[1]) + (x[2] - p[2]) * (x[2] - p[2]);
+                if (r2 <= R2) ws += exp(k * r2);
+            }
+        for (int c = 0; c < 3; c++) D[3 * (size_t)i + c] = acc[3 * (size_t)i + c] / ws;
+    }
+}
+/* the faces across each face's edges: nb[3 t + k] the one face other than t on edge T[3 t + k], T[3 t + (k + 1) % 3],
+   -1 when the edge has no other face or more than one. 0, or -1 for no memory */
+static inline int mk_sepvol_adj_(const int *T, int nt, int nv, int *nb)
+{
+    int *off = calloc((size_t)nv + 1, sizeof *off), *inc = malloc(sizeof *inc * 3 * (size_t)nt);
+    if (!off || !inc) { free(off), free(inc); return -1; }
+    for (size_t q = 0; q < 3 * (size_t)nt; q++) off[T[q] + 1]++;
+    for (int i = 0; i < nv; i++) off[i + 1] += off[i];
+    for (size_t q = 0; q < 3 * (size_t)nt; q++) inc[off[T[q]]++] = (int)(q / 3);
+    for (int i = nv; i > 0; i--) off[i] = off[i - 1];
+    off[0] = 0;
+    for (int t = 0; t < nt; t++)
+        for (int k = 0; k < 3; k++) {
+            const int a = T[3 * (size_t)t + k], b = T[3 * (size_t)t + (k + 1) % 3];
+            int other = -1, n = 0;
+            for (int j = off[a]; j < off[a + 1] && a != b; j++) {
+                const int u = inc[j], *Y = T + 3 * (size_t)u;
+                if (u != t && (Y[0] == b || Y[1] == b || Y[2] == b)) other = u, n++;
+            }
+            nb[3 * (size_t)t + k] = n == 1 ? other : -1;
+        }
+    free(off), free(inc);
+    return 0;
+}
+/* the length of M's edges folded over 90 degrees: edges of two faces (nb) whose normals are more than 90 degrees apart
+   (meshq's f90 is it over the area) */
+static inline double mk_sepvol_fold_(const double *V, const int *T, int nt, const int *nb)
+{
+    double L = 0;
+    for (int t = 0; t < nt; t++)
+        for (int k = 0; k < 3; k++) {
+            const int u = nb[3 * (size_t)t + k];
+            if (u < t) continue; /* each edge once, from its lower face */
+            double a[3], b[3];
+            mk_sepvol_fnormal_(V, T + 3 * (size_t)t, a), mk_sepvol_fnormal_(V, T + 3 * (size_t)u, b);
+#if defined(MK_MUTATE) && MK_MUTATE == 345
+            if (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] < 0.5) { /* 345: folds over 60 degrees counted */
+#else
+            if (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] < 0) {
+#endif
+                const double *p = V + 3 * (size_t)T[3 * (size_t)t + k], *q = V + 3 * (size_t)T[3 * (size_t)t + (k + 1) % 3];
+                L += sqrt((p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]) + (p[2] - q[2]) * (p[2] - q[2]));
+            }
+        }
+    return L;
 }
 
 /* each part's volume into pv[its root vertex] (part[v]: the root), about the root's own place, so a part far from the
@@ -575,7 +741,7 @@ static inline int mk_sepvol(double *V, int nv, const int *T, int nt, const doubl
                             double step, int rings, int rounds, mk_sepvol_report *rep)
 {
     mk_sepvol_report r = {0};
-    if (rep) *rep = r;
+    if (rep) memset(rep, 0, sizeof *rep); /* padding too: a caller may compare the bytes */
     const int held = HV != NULL;
     if (!mk_sepvol_ok_(V, nv, T, nt) || (held && (!HT || !mk_sepvol_ok_(HV, hnv, HT, hnt))) || !(gap >= 0) || !isfinite(gap) ||
         !(step > 0) || !isfinite(step) || rings < 0 || rounds < 1)
@@ -589,10 +755,11 @@ static inline int mk_sepvol(double *V, int nv, const int *T, int nt, const doubl
     if (V0) memcpy(V0, V, sizeof *V * 3 * (size_t)nv);
 #endif
     int *na = malloc(sizeof *na * (size_t)nv), *uf = malloc(sizeof *uf * (size_t)nv), *vl = malloc(sizeof *vl * (size_t)nv);
-    int *lab = held ? NULL : malloc(sizeof *lab * (size_t)nt), *pc = malloc(sizeof *pc * (size_t)nv), *part = malloc(sizeof *part * (size_t)nv);
+    int *lab = held ? NULL : malloc(sizeof *lab * (size_t)nt), *pc = malloc(sizeof *pc * (size_t)nv), *part = calloc((size_t)nv, sizeof *part);
     double *P = malloc(sizeof *P * 3 * (size_t)nv);
     char *in = malloc((size_t)nv), *fix = malloc((size_t)nv), *ch = malloc((size_t)nv), *bad = malloc((size_t)nv);
     unsigned char *lvl = malloc((size_t)nv);
+    int *head = NULL, *next = NULL, *nb = NULL, hn = 1;
     mk_bvh B = {0}, BH = {0};
     int ret = -1, closed = 0;
     if (!N || !D || !acc || !V0 || !Vr || !Vn || !Vb || !Vk || !sc || !pv0 || !pv || !na || !uf || !vl || (!held && !lab) || !part || !in || !fix || !pc ||
@@ -628,7 +795,17 @@ static inline int mk_sepvol(double *V, int nv, const int *T, int nt, const doubl
     }
     const double eps = 1e-3 * el / nt;
     r.vol0 = mk_sepvol_volume_(V, T, nt);
+    /* each face's neighbours across its edges: for the guard's folds and the folds reported */
+    if (!(nb = malloc(sizeof *nb * 3 * (size_t)nt)) || mk_sepvol_adj_(T, nt, nv, nb)) goto out;
+    r.fold0 = mk_sepvol_fold_(V, T, nt, nb);
+    /* held mode's smoothing in space (step 3): its sigma, and the grid of cells 3 sigma across it looks for neighbours in */
+    const double sig = held ? (MK_SEPVOL_SIGMA) * fmax(step, el / nt) : 0;
+    if (sig > 0) {
+        while (hn < nv && hn < 1 << 30) hn *= 2;
+        if (!(head = malloc(sizeof *head * (size_t)hn)) || !(next = malloc(sizeof *next * (size_t)nv))) goto out;
+    }
     long best = LONG_MAX;
+    long kept = LONG_MAX;
     int better = 0; /* the last round that measured fewer than any before */
     for (int round = 0;; round++) {
         mk_sepvol_normals_(V, nv, T, nt, N);
@@ -680,10 +857,17 @@ static inline int mk_sepvol(double *V, int nv, const int *T, int nt, const doubl
             (void)crush;
 #endif
         }
-        if (nin + np <= best) { /* the state kept: the fewest inside vertices and crossing pairs so far, the later on a
-                                   tie. A stalled push can end worse than a round before it */
-            if (nin + np < best) better = round;
-            best = nin + np, r.inside = nin, r.cross = np;
+        /* the state kept: the fewest inside vertices plus crossing pairs so far (the input is one, so the sum never
+           ends above the input's); the earliest on a tie, the latest once nothing is left. A stalled push can end worse
+           than a round before it */
+        if (nin + np < best) better = round, best = nin + np;
+#if defined(MK_MUTATE) && MK_MUTATE == 340
+        const long key = nin; /* 340: the fewest inside vertices, whatever the crossing pairs did */
+#else
+        const long key = nin + np;
+#endif
+        if (key < kept || (key == kept && !key)) {
+            kept = key, r.inside = nin, r.cross = np;
             memcpy(Vk, V, sizeof *V * 3 * (size_t)nv);
         }
         if (round - better >= MK_SEPVOL_STALL) break; /* no better state in that many rounds: stalled */
@@ -775,13 +959,16 @@ static inline int mk_sepvol(double *V, int nv, const int *T, int nt, const doubl
             for (int i = 0; i < nv; i++)
                 if (!fix[i] && na[i]) for (int c = 0; c < 3; c++) D[3 * (size_t)i + c] = 0.5 * acc[3 * (size_t)i + c] / na[i];
         }
+#if !(defined(MK_MUTATE) && MK_MUTATE == 341) /* 341: no smoothing in space */
+        if (sig > 0) mk_sepvol_gauss_(V, nv, D, sig, head, next, hn, acc, ch);
+#endif
         for (int i = 0; i < nv; i++) {
             double *e = D + 3 * (size_t)i;
             const double *u = N + 3 * (size_t)i, out = e[0] * u[0] + e[1] * u[1] + e[2] * u[2];
             if (out > 0) e[0] -= out * u[0], e[1] -= out * u[1], e[2] -= out * u[2]; /* never out of its own part */
             sc[i] = e[0] != 0 || e[1] != 0 || e[2] != 0;
         }
-        if (mk_sepvol_guard_(Vr, Vn, D, nv, T, nt, &B, grow, pself, sc, lvl, ch, bad)) goto out;
+        if (mk_sepvol_guard_(Vr, Vn, D, nv, T, nt, &B, grow, pself, held ? nb : NULL, sc, lvl, ch, bad)) goto out;
         long moved = 0;
         for (int i = 0; i < nv; i++) {
             if (!(D[3 * (size_t)i] != 0 || D[3 * (size_t)i + 1] != 0 || D[3 * (size_t)i + 2] != 0)) continue;
@@ -812,13 +999,357 @@ static inline int mk_sepvol(double *V, int nv, const int *T, int nt, const doubl
 #if !(defined(MK_MUTATE) && MK_MUTATE == 221) /* 221: crossing pairs left, and the status silent about them */
     if (r.cross > 0) r.status |= MK_SEPVOL_STILL_CROSSES;
 #endif
+#if !(defined(MK_MUTATE) && MK_MUTATE == 342) /* 342: vertices left inside, and the status silent about them */
+    if (r.inside > 0) r.status |= MK_SEPVOL_STILL_INSIDE;
+#endif
+#if !(defined(MK_MUTATE) && MK_MUTATE == 348) /* 348: more crossing pairs than the input's, and the status silent */
+    if (r.cross > r.cross0) r.status |= MK_SEPVOL_PAIRS_ROSE;
+#endif
+    r.fold1 = mk_sepvol_fold_(V, T, nt, nb);
     ret = 0;
 out:
     if (ret) memcpy(V, V0 ? V0 : V, V0 ? sizeof *V * 3 * (size_t)nv : 0);
     mk_bvh_free(&B), mk_bvh_free(&BH);
     free(N), free(D), free(acc), free(V0), free(Vr), free(Vn), free(Vb), free(Vk), free(sc), free(pv0), free(pv), free(na), free(uf), free(vl), free(lab), free(part), free(in), free(fix),
-        free(pc), free(P), free(ch), free(bad), free(lvl);
+        free(pc), free(P), free(ch), free(bad), free(lvl), free(head), free(next), free(nb);
     if (rep && ret != -1) *rep = r;
+    return ret;
+}
+
+/* crossing pairs of M's faces F[0, nf) (all nf = nt faces with F NULL) with H's (BH its tree over HV, HT), counted as
+   mk_sepvol_pairs_ counts them; M's positions V. -1: no memory */
+static inline long mk_sepvol_xcount_(const double *V, const int *T, const int *F, int nf, const mk_bvh *BH, const double *HV, const int *HT)
+{
+    int cap = 64, *buf = malloc(sizeof *buf * (size_t)cap);
+    long np = 0;
+    if (!buf) return -1;
+    for (int f = 0; f < nf; f++) {
+        const int t = F ? F[f] : f, *X = T + 3 * (size_t)t;
+        mk_aabb bx;
+        mk_tri_box_(V, T, t, &bx);
+        const int n = mk_sepvol_box_(BH, &bx, &buf, &cap);
+        if (n < 0) { free(buf); return -1; }
+        for (int i = 0; i < n; i++) {
+            const int *Y = HT + 3 * (size_t)buf[i];
+            np += mk_sepvol_edge_through_(V, X, HV, Y) || mk_sepvol_edge_through_(HV, Y, V, X);
+        }
+    }
+    free(buf);
+    return np;
+}
+static inline int mk_sepvol_boxes_meet_(const mk_aabb *a, const mk_aabb *b)
+{
+    for (int k = 0; k < 3; k++) if (a->hi[k] < b->lo[k] || b->hi[k] < a->lo[k]) return 0;
+    return 1;
+}
+/* M's vertices S[0, ns) inside H (its tree BH, its box hb), at positions V */
+static inline long mk_sepvol_xin_(const double *V, const int *S, int ns, const mk_bvh *BH, const mk_aabb *hb)
+{
+    long n = 0;
+    for (int s = 0; s < ns; s++) {
+        const double *v = V + 3 * (size_t)(S ? S[s] : s);
+        if (mk_aabb_dist2(hb, v) == 0) n += mk_bvh_inside(BH, v);
+    }
+    return n;
+}
+
+#ifndef MK_SEPVOL_PASSES
+#define MK_SEPVOL_PASSES 2 /* mk_sepvol_multi: passes over the held meshes */
+#endif
+/* Several held meshes in one call, each kept separate: M moved out of held mesh k (HV[k] with hnv[k] vertices, HT[k] with
+   hnt[k] faces, k < nh) by mk_sepvol, one mesh at a time, the one with the most inside vertices plus crossing pairs first
+   MK_SEPVOL_PASSES passes over the meshes that still have something left. Each is its own
+   inside and outside: no union is formed, so held meshes that overlap or touch are taken, where their union would cross
+   itself. A push out of one mesh can take M into another; the state handed back is the one after a push (or the input)
+   with the fewest inside vertices plus crossing pairs summed over the meshes, so the sum never ends above the input's;
+   the earliest on a tie, the latest once nothing is left. A mesh whose last push moved nothing is not pushed again
+   until something else has moved. A held mesh that cannot say inside from outside is left out: its report's status and
+   held_ fields say why, and rep->status carries its bits.
+   rep: inside0, inside, cross0, cross summed over the held meshes (a vertex inside two counts twice); M's own crossings,
+   volume, part_loss, folds, moved and worst against the input; rounds, refused and shortened summed over the pushes;
+   status as mk_sepvol's for the sums (MK_SEPVOL_PAIRS_ROSE: the summed crossing pairs above the input's), with the held
+   bits of any mesh left out. hrep[k] (may be NULL): inside0 and cross0 with mesh k at the start, inside and cross in the
+   state handed back, status as mk_sepvol's for those (PAIRS_ROSE: its own crossing pairs rose), rounds, refused and
+   shortened summed over its pushes, its held_ fields. Returns 0 when it ran, -1 as mk_sepvol (and for nh < 1 or a NULL mesh), -2
+   when every held mesh was left out. On -1 and -2 V is as it came in. */
+static inline int mk_sepvol_multi(double *V, int nv, const int *T, int nt, int nh, const double *const *HV, const int *hnv, const int *const *HT,
+                                  const int *hnt, double gap, double step, int rings, int rounds, mk_sepvol_report *rep, mk_sepvol_report *hrep)
+{
+    mk_sepvol_report r = {0};
+    if (rep) memset(rep, 0, sizeof *rep); /* padding too: a caller may compare the bytes */
+    if (hrep && nh > 0) memset(hrep, 0, sizeof *hrep * (size_t)nh);
+    if (nh < 1 || !HV || !hnv || !HT || !hnt || !mk_sepvol_ok_(V, nv, T, nt) || !(gap >= 0) || !isfinite(gap) || !(step > 0) || !isfinite(step) ||
+        rings < 0 || rounds < 1)
+        return -1;
+    for (int k = 0; k < nh; k++)
+        if (!HV[k] || !HT[k] || !mk_sepvol_ok_(HV[k], hnv[k], HT[k], hnt[k])) return -1;
+    mk_bvh *BH = calloc((size_t)nh, sizeof *BH), B = {0};
+    mk_aabb *hb = malloc(sizeof *hb * (size_t)nh);
+    mk_sepvol_report *hr = calloc((size_t)nh, sizeof *hr);
+    long *in0 = malloc(sizeof *in0 * (size_t)nh), *cr0 = malloc(sizeof *cr0 * (size_t)nh), *in = malloc(sizeof *in * (size_t)nh), *cr = malloc(sizeof *cr * (size_t)nh);
+    long *ink = malloc(sizeof *ink * (size_t)nh), *crk = malloc(sizeof *crk * (size_t)nh);
+    int *ord = malloc(sizeof *ord * (size_t)nh), *S = malloc(sizeof *S * (size_t)nv), *F = malloc(sizeof *F * (size_t)nt), *uf = malloc(sizeof *uf * (size_t)nv),
+        *part = calloc((size_t)nv, sizeof *part), *nb = malloc(sizeof *nb * 3 * (size_t)nt);
+    char *ok = calloc((size_t)nh, 1), *mv = malloc((size_t)nv), *still = calloc((size_t)nh, 1);
+    double *V0 = malloc(sizeof *V0 * 3 * (size_t)nv), *Vs = malloc(sizeof *Vs * 3 * (size_t)nv), *Vk = malloc(sizeof *Vk * 3 * (size_t)nv),
+           *pv0 = malloc(sizeof *pv0 * (size_t)nv), *pv = malloc(sizeof *pv * (size_t)nv);
+    int ret = -1, nok = 0, closed = 0;
+#if !(defined(MK_MUTATE) && MK_MUTATE == 346) /* 346: V0 filled after every allocation is checked */
+    if (V0) memcpy(V0, V, sizeof *V * 3 * (size_t)nv); /* before any goto out: the restore there copies V0 back */
+#endif
+    if (!BH || !hb || !hr || !in0 || !cr0 || !in || !cr || !ink || !crk || !ord || !S || !F || !uf || !part || !nb || !ok || !mv || !still || !V0 || !Vs || !Vk || !pv0 ||
+        !pv)
+        goto out;
+#if defined(MK_MUTATE) && MK_MUTATE == 346
+    memcpy(V0, V, sizeof *V * 3 * (size_t)nv);
+#endif
+    for (int k = 0; k < nh; k++) { /* the held meshes: each checked, its tree, its counts with M at the start */
+        if (mk_bvh_build(BH + k, HV[k], HT[k], hnt[k])) goto out;
+        const int st = mk_sepvol_heldcheck_(HV[k], HT[k], hnt[k], BH + k, hr + k);
+        if (st < 0) goto out;
+        hr[k].status = st, r.status |= st, ok[k] = !st, nok += !st;
+        mk_aabb_empty(hb + k);
+        for (int i = 0; i < hnv[k]; i++) mk_aabb_add(hb + k, HV[k] + 3 * (size_t)i);
+        in0[k] = cr0[k] = 0;
+        if (ok[k]) {
+            in0[k] = mk_sepvol_xin_(V, NULL, nv, BH + k, hb + k);
+            if ((cr0[k] = mk_sepvol_xcount_(V, T, NULL, nt, BH + k, HV[k], HT[k])) < 0) goto out;
+        }
+        in[k] = ink[k] = in0[k], cr[k] = crk[k] = cr0[k], hr[k].inside0 = in0[k], hr[k].cross0 = cr0[k];
+        r.inside0 += in0[k], r.cross0 += cr0[k];
+        ord[k] = k;
+    }
+    if (!nok) { ret = -2; goto out; }
+    for (int a = 1; a < nh; a++) /* the most inside vertices plus crossing pairs first; ties in the caller's order */
+        for (int b = a; b > 0 && in0[ord[b]] + cr0[ord[b]] > in0[ord[b - 1]] + cr0[ord[b - 1]]; b--) {
+            const int s = ord[b];
+            ord[b] = ord[b - 1], ord[b - 1] = s;
+        }
+    if ((closed = mk_sepvol_closed_(T, nt)) < 0) goto out;
+    for (int i = 0; i < nv; i++) uf[i] = i;
+    for (int t = 0; t < nt; t++)
+        for (int k = 0; k < 3; k++) uf[mk_sepvol_find_(uf, T[3 * (size_t)t + k])] = mk_sepvol_find_(uf, T[3 * (size_t)t + (k + 1) % 3]);
+    for (int i = 0; i < nv; i++) part[i] = mk_sepvol_find_(uf, i);
+    mk_sepvol_partvol_(V, T, nt, part, nv, pv0);
+    r.vol0 = mk_sepvol_volume_(V, T, nt);
+    if (mk_sepvol_adj_(T, nt, nv, nb)) goto out;
+    r.fold0 = mk_sepvol_fold_(V, T, nt, nb);
+    if (mk_bvh_build(&B, V, T, nt)) goto out;
+    if ((r.self0 = mk_sepvol_self_(V, T, nt, &B, 0, NULL)) < 0) goto out;
+    mk_bvh_free(&B);
+    memcpy(Vk, V, sizeof *V * 3 * (size_t)nv);
+    long kept = r.inside0 + r.cross0;
+    for (int pass = 0; pass < MK_SEPVOL_PASSES; pass++) {
+        int pushed = 0;
+        for (int o = 0; o < nh; o++) {
+            const int k = ord[o];
+            if (!ok[k] || !(in[k] + cr[k]) || still[k]) continue; /* still: its last push moved nothing, and nothing has since */
+            memcpy(Vs, V, sizeof *V * 3 * (size_t)nv);
+            mk_sepvol_report q;
+            const int rc = mk_sepvol(V, nv, T, nt, HV[k], hnv[k], HT[k], hnt[k], gap, step, rings, rounds, &q);
+            if (rc == -1) goto out;
+            hr[k].rounds += q.rounds, hr[k].refused += q.refused, hr[k].shortened += q.shortened;
+            r.rounds += q.rounds, r.refused += q.refused, r.shortened += q.shortened, r.status |= q.status & MK_SEPVOL_CRUSHED;
+            int ns = 0, nf = 0; /* what moved, and the faces it moved */
+            for (int i = 0; i < nv; i++) {
+                const double *a = V + 3 * (size_t)i, *b = Vs + 3 * (size_t)i;
+                mv[i] = a[0] != b[0] || a[1] != b[1] || a[2] != b[2];
+                if (mv[i]) S[ns++] = i;
+            }
+            if (!ns) { still[k] = 1; continue; }
+            pushed = 1, memset(still, 0, (size_t)nh);
+            mk_aabb mb;
+            mk_aabb_empty(&mb);
+            for (int t = 0; t < nt; t++) /* the faces it moved, and the box of all they span before and after */
+                if (mv[T[3 * (size_t)t]] || mv[T[3 * (size_t)t + 1]] || mv[T[3 * (size_t)t + 2]]) {
+                    F[nf++] = t;
+                    for (int c = 0; c < 3; c++) mk_aabb_add(&mb, V + 3 * (size_t)T[3 * (size_t)t + c]), mk_aabb_add(&mb, Vs + 3 * (size_t)T[3 * (size_t)t + c]);
+                }
+            for (int j = 0; j < nh; j++) { /* each other held mesh: its counts after the push, from what moved */
+                if (j == k || !ok[j] || !mk_sepvol_boxes_meet_(&mb, hb + j)) continue;
+                const long a1 = mk_sepvol_xcount_(V, T, F, nf, BH + j, HV[j], HT[j]), a0 = mk_sepvol_xcount_(Vs, T, F, nf, BH + j, HV[j], HT[j]);
+                if (a1 < 0 || a0 < 0) goto out;
+                in[j] += mk_sepvol_xin_(V, S, ns, BH + j, hb + j) - mk_sepvol_xin_(Vs, S, ns, BH + j, hb + j), cr[j] += a1 - a0;
+            }
+            in[k] = q.inside, cr[k] = q.cross;
+            long sum = 0;
+            for (int j = 0; j < nh; j++) sum += in[j] + cr[j];
+#if defined(MK_MUTATE) && MK_MUTATE == 344
+            sum = 0; /* 344: the last state handed back, whatever it did to the other held meshes */
+#endif
+            if (sum < kept || (sum == kept && !sum)) {
+                kept = sum;
+                memcpy(Vk, V, sizeof *V * 3 * (size_t)nv), memcpy(ink, in, sizeof *in * (size_t)nh), memcpy(crk, cr, sizeof *cr * (size_t)nh);
+            }
+        }
+        if (!pushed) break;
+    }
+    memcpy(V, Vk, sizeof *V * 3 * (size_t)nv);
+    for (int k = 0; k < nh; k++) {
+        hr[k].inside = ink[k], hr[k].cross = crk[k], r.inside += ink[k], r.cross += crk[k];
+        if (ok[k] && crk[k]) hr[k].status |= MK_SEPVOL_STILL_CROSSES;
+        if (ok[k] && ink[k]) hr[k].status |= MK_SEPVOL_STILL_INSIDE;
+        if (ok[k] && crk[k] > cr0[k]) hr[k].status |= MK_SEPVOL_PAIRS_ROSE;
+    }
+    if (mk_bvh_build(&B, V, T, nt)) goto out;
+    if ((r.self1 = mk_sepvol_self_(V, T, nt, &B, 0, NULL)) < 0) goto out;
+    if (r.self0) r.status |= MK_SEPVOL_SELF_CROSSES;
+    if (r.cross) r.status |= MK_SEPVOL_STILL_CROSSES;
+    if (r.inside) r.status |= MK_SEPVOL_STILL_INSIDE;
+    if (r.cross > r.cross0) r.status |= MK_SEPVOL_PAIRS_ROSE;
+    for (int i = 0; i < nv; i++) {
+        const double *a = V + 3 * (size_t)i, *b = V0 + 3 * (size_t)i;
+        r.moved += a[0] != b[0] || a[1] != b[1] || a[2] != b[2];
+        r.worst = fmax(r.worst, sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])));
+    }
+    r.vol1 = mk_sepvol_volume_(V, T, nt);
+    if (closed) mk_sepvol_partvol_(V, T, nt, part, nv, pv), r.part_loss = mk_sepvol_loss_(pv0, pv, nv);
+    r.fold1 = mk_sepvol_fold_(V, T, nt, nb);
+    ret = 0;
+out:
+    if (ret == -1 && V0) memcpy(V, V0, sizeof *V * 3 * (size_t)nv);
+    mk_bvh_free(&B);
+    for (int k = 0; BH && k < nh; k++) mk_bvh_free(BH + k);
+    if (hrep && ret != -1) memcpy(hrep, hr, sizeof *hr * (size_t)nh);
+    if (rep && ret != -1) *rep = r;
+    free(BH), free(hb), free(hr), free(in0), free(cr0), free(in), free(cr), free(ink), free(crk), free(ord), free(S), free(F), free(uf), free(part), free(nb), free(ok),
+        free(mv), free(still), free(V0), free(Vs), free(Vk), free(pv0), free(pv);
+    return ret;
+}
+
+/* M's volume given back toward vol where there is room. The movers: M's vertices outside every
+   held mesh (k < nh; nh 0: none) none of whose faces has a held face within depth of its box. They move out along their
+   normals, all by one distance, so that M's enclosed volume meets vol: MK_SEPVOL_RESTORE steps of Newton's method (the
+   rate: the faces they touch, each against their normals), each at most depth / 2, the movers chosen again at each
+   step. A face moving less than depth stays clear of every held mesh, so none is crossed, entered or swept over: no
+   vertex ends inside a held mesh, and no face crosses one, that did not at the start. Each step goes through held mode's
+   guard (no new own crossing pair, no new fold over 90 degrees); where it holds moves back the volume falls short of
+   vol. rep: vol0, vol1, moved, worst, self0, self1, fold0, fold1, inside0, inside, cross0, cross (summed over the held
+   meshes), rounds (the steps run), refused, shortened; status MK_SEPVOL_SELF_CROSSES when M crossed itself at the start.
+   Returns 0 when it ran, -1 as mk_sepvol_multi (and for depth not positive or vol not finite), -2 when a held mesh
+   cannot say inside from outside (rep->status has its bits). On -1 and -2 V is as it came in. */
+#ifndef MK_SEPVOL_RESTORE
+#define MK_SEPVOL_RESTORE 4 /* mk_sepvol_restore's Newton steps */
+#endif
+static inline int mk_sepvol_restore(double *V, int nv, const int *T, int nt, int nh, const double *const *HV, const int *hnv, const int *const *HT,
+                                    const int *hnt, double vol, double depth, mk_sepvol_report *rep)
+{
+    mk_sepvol_report r = {0};
+    if (rep) memset(rep, 0, sizeof *rep); /* padding too: a caller may compare the bytes */
+    if (nh < 0 || (nh && (!HV || !hnv || !HT || !hnt)) || !mk_sepvol_ok_(V, nv, T, nt) || !isfinite(vol) || !(depth > 0) || !isfinite(depth)) return -1;
+    for (int k = 0; k < nh; k++)
+        if (!HV[k] || !HT[k] || !mk_sepvol_ok_(HV[k], hnv[k], HT[k], hnt[k])) return -1;
+    mk_bvh *BH = calloc((size_t)(nh ? nh : 1), sizeof *BH), B = {0};
+    mk_aabb *hb = malloc(sizeof *hb * (size_t)(nh ? nh : 1));
+    double *V0 = malloc(sizeof *V0 * 3 * (size_t)nv), *N = malloc(sizeof *N * 3 * (size_t)nv), *D = malloc(sizeof *D * 3 * (size_t)nv),
+           *Vn = malloc(sizeof *Vn * 3 * (size_t)nv), *s = malloc(sizeof *s * (size_t)nv);
+    int *nb = malloc(sizeof *nb * 3 * (size_t)nt);
+    char *ch = malloc((size_t)nv), *bad = malloc((size_t)nv);
+    int cap = 64, *buf = malloc(sizeof *buf * (size_t)cap);
+    unsigned char *lvl = malloc((size_t)nv);
+    int ret = -1;
+    if (V0) memcpy(V0, V, sizeof *V * 3 * (size_t)nv); /* before any goto out: the restore there copies V0 back */
+    if (!BH || !hb || !V0 || !N || !D || !Vn || !s || !nb || !ch || !bad || !buf || !lvl) goto out;
+    for (int k = 0; k < nh; k++) {
+        if (mk_bvh_build(BH + k, HV[k], HT[k], hnt[k])) goto out;
+        mk_sepvol_report hr = {0};
+        const int st = mk_sepvol_heldcheck_(HV[k], HT[k], hnt[k], BH + k, &hr);
+        if (st < 0) goto out;
+        if (st) { r.status |= st, ret = -2; goto out; }
+        mk_aabb_empty(hb + k);
+        for (int i = 0; i < hnv[k]; i++) mk_aabb_add(hb + k, HV[k] + 3 * (size_t)i);
+        r.inside0 += mk_sepvol_xin_(V, NULL, nv, BH + k, hb + k);
+        const long c = mk_sepvol_xcount_(V, T, NULL, nt, BH + k, HV[k], HT[k]);
+        if (c < 0) goto out;
+        r.cross0 += c;
+    }
+    if (mk_sepvol_adj_(T, nt, nv, nb)) goto out;
+    r.fold0 = mk_sepvol_fold_(V, T, nt, nb), r.vol0 = mk_sepvol_volume_(V, T, nt);
+    if (mk_bvh_build(&B, V, T, nt)) goto out;
+    if ((r.self0 = mk_sepvol_self_(V, T, nt, &B, 0, NULL)) < 0) goto out;
+    if (r.self0) r.status |= MK_SEPVOL_SELF_CROSSES;
+    for (int it = 0; it < MK_SEPVOL_RESTORE; it++) {
+        const double v = mk_sepvol_volume_(V, T, nt);
+        if (!(v != vol)) break;
+        mk_sepvol_normals_(V, nv, T, nt, N);
+        long nm = 0;
+        for (int i = 0; i < nv; i++) { /* the movers: outside every held mesh */
+            const double *p = V + 3 * (size_t)i;
+            int ok = 1;
+            for (int k = 0; k < nh && ok; k++) ok = !(mk_aabb_dist2(hb + k, p) == 0 && mk_bvh_inside(BH + k, p));
+            s[i] = ok;
+        }
+        for (int t = 0; t < nt; t++) { /* and on no face with a held face within depth of its box: a face moving less than
+                                          depth stays clear of every held mesh, so none is crossed, entered or swept over */
+            const int *X = T + 3 * (size_t)t;
+            if (!s[X[0]] && !s[X[1]] && !s[X[2]]) continue;
+            mk_aabb fb;
+            mk_tri_box_(V, T, t, &fb);
+            for (int c = 0; c < 3; c++) fb.lo[c] -= depth, fb.hi[c] += depth;
+            int near = 0;
+            for (int k = 0; k < nh && !near; k++) {
+                if (!mk_sepvol_boxes_meet_(&fb, hb + k)) continue;
+                const int n = mk_sepvol_box_(BH + k, &fb, &buf, &cap);
+                if (n < 0) goto out;
+                near = n > 0;
+            }
+#if defined(MK_MUTATE) && MK_MUTATE == 347
+            near = 0; /* 347: faces near a held mesh move too */
+#endif
+            if (near) s[X[0]] = s[X[1]] = s[X[2]] = 0;
+        }
+        for (int i = 0; i < nv; i++) nm += s[i] > 0;
+        double area = 0;
+        for (int t = 0; t < nt; t++) {
+            const int *X = T + 3 * (size_t)t;
+            if (!s[X[0]] && !s[X[1]] && !s[X[2]]) continue;
+            const double *a = V + 3 * (size_t)X[0], *b = V + 3 * (size_t)X[1], *c = V + 3 * (size_t)X[2];
+            const double u[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, w[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+            const double n[3] = {u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]};
+            double f = 0; /* the face's rate of volume: half its area vector against its moving corners' mean normal */
+            for (int c = 0; c < 3; c++)
+                if (s[X[c]]) f += (n[0] * N[3 * (size_t)X[c]] + n[1] * N[3 * (size_t)X[c] + 1] + n[2] * N[3 * (size_t)X[c] + 2]) / 6;
+            area += f;
+        }
+        if (!nm || !(area > 0)) break;
+        double d = (vol - v) / area;
+        if (fabs(d) > 0.5 * depth) d = copysign(0.5 * depth, d);
+        for (int i = 0; i < nv; i++) for (int c = 0; c < 3; c++) D[3 * (size_t)i + c] = s[i] ? d * N[3 * (size_t)i + c] : 0;
+        mk_bvh_free(&B);
+        if (mk_bvh_build(&B, V, T, nt)) goto out;
+        if (mk_sepvol_guard_(V, Vn, D, nv, T, nt, &B, 0, NULL, nb, s, lvl, ch, bad)) goto out;
+        long moved = 0;
+        for (int i = 0; i < nv; i++) {
+            if (!(D[3 * (size_t)i] != 0 || D[3 * (size_t)i + 1] != 0 || D[3 * (size_t)i + 2] != 0)) continue;
+            if (!(s[i] > 0)) { r.refused++; continue; }
+            r.shortened += lvl[i] > 0, moved++;
+            memcpy(V + 3 * (size_t)i, Vn + 3 * (size_t)i, sizeof *V * 3);
+        }
+        r.rounds = it + 1;
+        if (!moved) break;
+    }
+    for (int k = 0; k < nh; k++) { /* the counts after */
+        r.inside += mk_sepvol_xin_(V, NULL, nv, BH + k, hb + k);
+        const long c = mk_sepvol_xcount_(V, T, NULL, nt, BH + k, HV[k], HT[k]);
+        if (c < 0) goto out;
+        r.cross += c;
+    }
+    mk_bvh_free(&B);
+    if (mk_bvh_build(&B, V, T, nt)) goto out;
+    if ((r.self1 = mk_sepvol_self_(V, T, nt, &B, 0, NULL)) < 0) goto out;
+    for (int i = 0; i < nv; i++) {
+        const double *a = V + 3 * (size_t)i, *b = V0 + 3 * (size_t)i;
+        r.moved += a[0] != b[0] || a[1] != b[1] || a[2] != b[2];
+        r.worst = fmax(r.worst, sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])));
+    }
+    r.vol1 = mk_sepvol_volume_(V, T, nt), r.fold1 = mk_sepvol_fold_(V, T, nt, nb);
+    ret = 0;
+out:
+    if (ret && V0) memcpy(V, V0, sizeof *V * 3 * (size_t)nv);
+    mk_bvh_free(&B);
+    for (int k = 0; BH && k < nh; k++) mk_bvh_free(BH + k);
+    if (rep && ret != -1) *rep = r;
+    free(BH), free(hb), free(V0), free(N), free(D), free(Vn), free(s), free(nb), free(ch), free(bad), free(buf), free(lvl);
     return ret;
 }
 #endif
