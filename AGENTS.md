@@ -1,0 +1,7 @@
+# Code Review Rules
+
+- Preserve the documented numerical contracts. Existing public calls are frozen: distinguish a regression fix that restores a stated result from a changed algorithm, argument contract or result that belongs under a new API. Use the method's units, normalization and reference values when checking a change; a plausible-looking number is insufficient evidence.
+- Check error paths against each call's ownership contract. Validate dimensions and allocation arithmetic before indexing or allocating. Preserve caller outputs when failure is documented as leaving them untouched, and keep partially built objects safely freeable. Do not assume every function accepts NaN, infinity, empty input or overlapping buffers; consult its header contract and identify a concrete permitted input for each finding.
+- Preserve stated determinism and floating-point behavior. Serial and OpenMP results must agree where promised; tie-breaking and reduction order matter. For inline min/max, NaN and signed-zero behavior are part of the contract. Treat libc-dependent rounding and explicitly documented platform limits as limits, not bugs.
+
+Review correctness and consequential performance issues before style. Cite the affected line, a concrete trigger and observable consequence. Tests that pass only on ordinary inputs do not establish boundary behavior; a test-only `MK_MUTATE` branch is an intentional fault and is not production code.
