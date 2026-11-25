@@ -400,8 +400,8 @@ static inline int mk_graft_init(mk_graft *g, const double *V, int nv, const int 
         g->psi[i] = s;
     }
 #if !(defined(MK_MUTATE) && MK_MUTATE == 372) /* 372: a vertex just off the seam left on its side */
-    /* a vertex just off the seam (its psi under 1 % of the way to a neighbour's across it) goes to the side most of its
-       neighbours are on: S's cut circles such a vertex at 1 % of its edges, and on the other side that detour is an
+    /* a vertex just off the seam (its psi under about 1 % of the way to a neighbour's across it: |pa| < 0.0101 |pb|)
+       goes to the side most of its neighbours are on: S's cut circles such a vertex at 1 % of its edges, and on the other side that detour is an
        inlet round most of it, which the patch's fans fold over (a muscle cut against a thin membrane: a vertex 16-30 um
        inside it, 4 crossing pairs); on their side the detour spans its few neighbours across, under half a turn */
     int *side = calloc((size_t)nv, sizeof *side);

@@ -2,9 +2,9 @@
 
 mathkit is a header-only C23 kit of numerical and geometric methods: small dense linear algebra, sparse Krylov
 solvers, FFTs and spectral analysis, quadrature, ODE steppers, optimizers, statistics, interpolation, random numbers,
-and triangle-mesh geometry (BVH queries, signed distance grids, surface nets). It needs only libc and libm. Built with
-`-fopenmp`, its hot loops run on OpenMP threads; without it they run serially and give the same results. This is
-version 1.7.0 (`MK_VERSION` in `include/mk_version.h`).
+rate laws in temperature, and triangle-mesh geometry (BVH queries, signed distance grids, surface nets, a triangle order
+for the vertex cache). It needs only libc and libm. Built with `-fopenmp`, its hot loops run on OpenMP threads; without
+it they run serially and give the same results. This is version 1.10.1 (`MK_VERSION` in `include/mk_version.h`).
 
 ## Using it
 
@@ -55,7 +55,7 @@ make bench          # CG on a 64^3 Laplacian (OMP=1: threaded); BVH query rates 
 - each test `test/t_*.c` passes on the real headers: it exits 0 with at least one PASS row and no FAIL row, within
   `LIMIT` seconds (default 120). A SKIP row, one that cannot run on this machine, is printed and counted in
   `skipped`, never as a pass;
-- every planted fault but one is caught. The headers hold 178 test-only faults, each under `MK_MUTATE == N`.
+- every planted fault but one is caught. The headers hold 192 test-only faults, each under `MK_MUTATE == N`.
   check.sh builds the fault's test with `-DMK_MUTATE=N`, and the test must print a FAIL row; a timeout, a crash or a
   bare nonzero exit is not a catch (the rules are in `test/judge.sh`). Never define `MK_MUTATE` outside the tests;
 - `t_par`, built with `-fopenmp`, gives the same bytes at 1, 2 and 12 threads, and its result hashes (BITS lines) equal
@@ -125,6 +125,9 @@ What the mesh parts, the any-length FFT and the motion split guarantee:
 - `mk_mtet`: closed and manifold inside the box, wound outward, no triangle with |2A| under 0.01 h^2; a part with no
   solid or gap thinner than 2 h keeps its components and Euler characteristic, and a ball's volume is low by about
   (h/R)^2 / 2.
+- `mk_vcache_order`: the result is a permutation of the input's triangles, each with its three indices in their order;
+  the scores are integers, so the same input gives the same bytes on every machine and compiler; on a shuffled
+  160 x 160 grid and a shuffled 120 x 96 sphere, ACMR at most 0.75, 0.72 and 0.70 at caches 16, 32 and 64.
 
 ## Headers
 
@@ -133,6 +136,7 @@ What the mesh parts, the any-length FFT and the motion split guarantee:
 | mk_version.h | the version | MK_VERSION, MK_VERSION_MAJOR, MK_VERSION_MINOR, MK_VERSION_PATCH |
 | mk_par.h | the block scheme behind the threads | mk_par_blk, mk_par_nblk, mk_par_range |
 | mk_vec.h | 3-vectors, unit quaternions (w, x, y, z), rigid transforms | `mk_v3_*`, `mk_q_*`, `mk_xf_*`, mk_lerp |
+| mk_minmax.h | fmax, fmin, fmaxf and fminf inline, glibc's results bit for bit | mk_fmax, mk_fmin, mk_fmaxf, mk_fminf; MK_MINMAX_LIBM |
 | mk_rng.h | `xoshiro256**` streams, splitmix64, Neumaier sum | mk_rng_seed, mk_rng_u01, mk_rng_gauss, mk_sum_add |
 | mk_stats.h | selection, median, type-7 quantiles, Welford | mk_select, mk_median, mk_quantile, `mk_welford_*` |
 | mk_interp.h | 1-D PCHIP, natural cubic spline, linear | mk_pchip_eval, mk_spline_slopes, mk_hermite_eval |
@@ -152,6 +156,8 @@ What the mesh parts, the any-length FFT and the motion split guarantee:
 | mk_sepvol.h | interpenetrating closed meshes moved apart | mk_sepvol, mk_sepvol_multi, mk_sepvol_restore |
 | mk_dec.h | decimation without folds or crossings | mk_decimate, mk_decimate_map, mk_dec_defaults |
 | mk_graft.h | marching tetrahedra; a mesh region replaced | mk_mtet, mk_graft_patch, mk_graft_stitch |
+| mk_vcache.h | a triangle order for the post-transform vertex cache (Forsyth); its cache misses | mk_vcache_order, mk_vcache_acmr |
+| mk_rate.h | how a rate, a relaxation time or a viscosity follows temperature | mk_rate_q, mk_rate_arrhenius, mk_rate_wlf_log10, mk_rate_walther |
 
 Each header's top comment describes its method, layouts and limits; each call's comment gives its arguments and
 return values.
@@ -164,14 +170,16 @@ return values.
 - Flat, row-major arrays with 0-based indices: a dense matrix is `a[i * n + j]`; a mesh is `V[3 v + k]` (coordinates)
   and `T[3 t + j]` (vertex indices); a grid is indexed `(k n1 + j) n0 + i`, x fastest.
 - Sizes are `int` in most calls; `long` or `size_t` where arrays can be larger (statistics arrays, triplet counts,
-  point batches).
+  point batches). `mk_vcache_order` and `mk_vcache_acmr` take a GPU's index buffer: `uint32_t` indices, a `size_t`
+  triangle count.
 - Return codes: 0 for success and -1 for a bad argument, no memory or a non-finite result. `mk_cg` and `mk_bicgstab`
   return 1 when they stop short of the tolerance. `mk_graft_stitch` returns 1 to 5 with its result when that result is
   not clean: 2 inverted, 1 open, 3 split, 4 a zero-area triangle, 5 new crossing pairs, the first of them in that
   order, with every fault a bit in `rep->faults`; on -1, `rep->reason` says why. Some calls use -2 for a second
   failure: no memory in `mk_ode23s` and `mk_bdf_step`, an unusable held mesh in `mk_sepvol`, `mk_sepvol_multi` and
-  `mk_sepvol_restore`. Calls that return a value say how they fail: `mk_lstsq` and `mk_lm` return -1, `mk_nm` NaN;
-  `mk_lbfgs` and `mk_cmaes` set `status` to -1 (and return NaN when they cannot start).
+  `mk_sepvol_restore`. Calls that return a value say how they fail: `mk_lstsq`, `mk_lm` and `mk_vcache_acmr` return
+  -1, `mk_nm` and the `mk_rate` laws NaN (`mk_rate_walther_fit` -1); `mk_lbfgs` and `mk_cmaes` set `status` to -1 (and
+  return NaN when they cannot start). `mk_vcache_order` leaves the list untouched when it returns -1.
 - Memory: a call that builds an object (`mk_fft_plan`, `mk_spec_init`, `mk_csr_from_triplets`, `mk_bvh_build`,
   `mk_sdf_mesh`, `mk_snet_build`, `mk_hhd_init`, `mk_graft_init`, `mk_mtet`) allocates it with `malloc`. Free it with
   the matching `*_free` (`mk_gmesh_free` for a mesh), which is also safe after a failed build. `mk_snet_faces` returns
@@ -185,14 +193,18 @@ return values.
   `mk_graft_init` refuse non-finite coordinates (`mk_bvh_build` does not check them). The solvers return -1 for a NaN
   or vanishing pivot or a non-finite answer rather than return it. The statistics calls need NaN-free input and give
   NaN for an empty array. `mk_sum` gives the IEEE result once the sum is not finite.
-- Units are the caller's. Angles are in radians, except `mk_dec_opts`' `minangle` and `fold`, in degrees.
+- Units are the caller's, except temperatures in K where `mk_rate_arrhenius` and `mk_rate_walther` need them, and the
+  latter's mm^2/s. Angles are in radians, except `mk_dec_opts`' `minangle` and `fold`, in degrees.
 - FFTs: forward is e^{-i}, inverse e^{+i}, and neither is normalized.
 - Mesh queries break ties by the lowest triangle index, so their results do not depend on the tree's shape.
   `mk_decimate` takes, of equal costs, the lower-numbered vertex first. Its `refused` counts nine refusals: link, turn,
-  edge, angle, fold, owned distance, sample distance, crossing and low.
+  edge, angle, fold, owned distance, sample distance, crossing and low. `mk_vcache_order` takes, of equal scores, the
+  lowest-numbered triangle.
 
 ## Known limits
 
+- `mk_minmax.h` gives glibc's results. With another C library a NaN still goes to that library's function, and its ordered
+  results may differ only where that library orders -0 and +0 differently.
 - No sparse direct solver, multigrid or ILU. IC(0)'s triangular solves are serial.
 - `mk_bdf_step` is one step without error control: the caller chooses h.
 - `mk_winding_number` costs O(triangles) per point, and so does each node of an odd row in `mk_sdf_mesh`.
@@ -222,10 +234,30 @@ return values.
   refuses with 5.
 - `mk_mtet` keeps no solid or gap thinner than 2 h: a sheet that thin falls apart into pieces.
 - `mk_fftm_c` without the memory for a Bluestein length falls back to the direct sum, right but O(n^2).
+- `mk_vcache_order` rescores a vertex's remaining triangles on every step it stays in the cache, so a vertex used by
+  n triangles costs O(n^2) in all: a fan of 80,000 triangles round one vertex took 3.6 s, and 1.77 M triangles of a body
+  mesh 0.55 s. It counts a vertex with over 32 triangles to come as having 32, and takes at most `MK_VCACHE_MAXT`
+  (1,431,655,765) triangles. At a dead end it takes the lowest-numbered triangle left, not the best-scoring one.
+- ACMR under a FIFO is a model: GPUs reuse vertex shader results in their own ways, and a GPU can run the shader well
+  over once per ACMR miss, so the speedup an order brings is measured on the GPU.
+- `mk_rate_wlf_log10` describes a polymer from its glass temperature to about 100 K above it; under Tref - 0.99 C2 it is
+  held, not a glass law. `mk_rate_walther` is for 2 mm^2/s and more, and knows nothing of the wax or polymer that thickens
+  a cold oil. Subtracting 1/T and 1/Tref costs `mk_rate_arrhenius` up to theta (1/T + 1/Tref) times 2^-53 of its result.
 
 ## What the tests check
 
 - t_vec: known turns, composition, matrix round trips, inverse transforms, slerp, constant-rate integration, `mk_lerp`.
+- t_minmax: `mk_fmax`, `mk_fmin`, `mk_fmaxf` and `mk_fminf` bit for bit against the C library on every pair of special
+  values and 4 million random pairs, and `MK_MINMAX_LIBM` with `<math.h>` included after the header.
+- t_vcache: the scores against their formulas; a shuffled grid and a shuffled sphere reordered (ACMR at caches 16, 32
+  and 64 under the bounds in Stability and below the input's, a permutation with each triangle's indices in order, the
+  same bytes from two runs and the bytes recorded for this version); equal scores to the lowest index; triangles listed
+  three times and triangles that repeat a vertex; refusals with the list untouched; `mk_vcache_acmr` on orders counted
+  by hand (a FIFO of exactly k, not an LRU).
+- t_rate: each law exactly 1 (WLF: 0) at its reference, and against its closed form in long double within the bound of
+  its own roundings; a Q10 over 10 K; the activation energy that doubles a rate from 298.15 to 308.15 K; the equivalent
+  time of a history of constant pieces, and back; the universal WLF pair moved 50 K, and its hold before the pole;
+  Walther through its two points and between them; each refusal.
 - t_fft: a cosine's two bins, Parseval, round trips, a direct DFT in 1-D, 2-D and 3-D, split equal to complex, real
   input; `mk_fftm` against a long-double DFT within its stated bound, both directions, at every length to 520 and at
   13 lengths to 2^20 (Bluestein's included), its stored twiddles and chirps correctly rounded, and its direct-sum
@@ -338,8 +370,31 @@ off the seam on its neighbours' side (planted fault 372, which changes results o
 - mk_dec.h: Garland and Heckbert 1997, "Surface simplification using quadric error metrics". Dey, Edelsbrunner, Guha
   and Nekhayev 1999, "Topology preserving edge contraction" (the link condition).
 - mk_graft.h: Freudenthal 1942, "Simplizialzerlegungen von beschränkter Flachheit" (six tetrahedra a cube).
+- mk_vcache.h: Forsyth 2006, "Linear-speed vertex cache optimisation" (the scores and their constants). Hoppe 1999,
+  "Optimization of mesh locality for transparent vertex caching" (ACMR under a FIFO cache).
+- mk_rate.h: Arrhenius 1889, "Über die Reaktionsgeschwindigkeit bei der Inversion von Rohrzucker durch Säuren". Andrade
+  1930, "The viscosity of liquids". Williams, Landel and Ferry 1955, "The temperature dependence of relaxation mechanisms
+  in amorphous polymers and other glass-forming liquids". Walther 1928, "The variation of viscosity with temperature";
+  ASTM D341, "Viscosity-temperature equations and charts for liquid petroleum or hydrocarbon products".
 
 ## Changes
+
+1.10.1:
+- `mk_rate_walther_fit` refuses a second point at 0 K or INFINITY; it accepted one and gave a curve with no temperature in
+  it.
+
+1.10.0:
+- `mk_rate.h`: how a rate, a relaxation time or a viscosity follows temperature, each law with its reference temperature
+  as an argument: a factor per width of warming (a Q10), Arrhenius, WLF and Walther (ASTM D341). No other header changed.
+
+1.9.0:
+- `mk_vcache.h`: `mk_vcache_order` reorders a triangle list for the post-transform vertex cache by Forsyth's method,
+  with integer scores, so the result is the same bytes everywhere; `mk_vcache_acmr` gives an order's average cache
+  misses per triangle under a FIFO cache. No other header changed.
+
+1.8.0:
+- `mk_minmax.h`: fmax, fmin, fmaxf and fminf inline, with glibc's results bit for bit; `MK_MINMAX_LIBM` turns the
+  library names in a unit into them, for use with `-include`.
 
 1.7.0:
 - Every part is frozen; the guarantees of the mesh parts, `mk_fftm` and `mk_hhd_split` are listed under Stability.
