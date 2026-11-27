@@ -40,7 +40,7 @@ if [ "${OMP:-0}" != 1 ]; then # the pragmas as well: each header alone with -fop
 fi
 CRASHES="" # planted faults caught by a crash rather than a FAIL row, as fault:signal (none)
 . test/judge.sh
-for spec in "vec 1 2" "minmax 380 381" "vcache 390 391 392 393" "rate 400 401 402 403 404 405 406 407" "fft 11 12 238 239 300 301 302 303 304 305 306 307 309" "hhd 240 241 242 243 244 245 310 311 312 313 314" "linalg 21 22 23 24 25 26 27" "rng 31 32 33 34" "opt 41 42 43 44 45" "ode 51 52 53 54 55" "stats 61 62 63 64 65" "interp 71 72" "vpflow 131 132" "snet 121 122 123 124 125" "sdf 141 142 143 144 145 207 208" "sparse 101 102 103 104 105 106" "quad 111 112 113 114" "spec 81 82 83 84" "geom 91 92 93 94 95 206 214" "sepvol 151 152 153 154 155 156 157 158 159 191 192 193 194 195 212 213 215 216 217 218 219 220 221 340 341 342 343 344 345 346 347 348" "dec 161 162 163 164 165 201 320 321" "ovl 171 172 173 371" "graft 181 182 202 203 204 205 209 210 360 361 362 363 364 365 366 367 368 369 373" "par 211" "regr 222 223 224 225 226 227 228 229 230 231 232 233 234 235 236 237"; do
+for spec in "vec 1 2" "minmax 380 381 382" "vcache 390 391 392 393" "rate 400 401 402 403 404 405 406 407 408" "fft 11 12 238 239 300 301 302 303 304 305 306 307 309" "hhd 240 241 242 243 244 245 310 311 312 313 314" "linalg 21 22 23 24 25 26 27" "rng 31 32 33 34" "opt 41 42 43 44 45" "ode 51 52 53 54 55" "stats 61 62 63 64 65" "interp 71 72" "vpflow 131 132" "snet 121 122 123 124 125" "sdf 141 142 143 144 145 207 208" "sparse 101 102 103 104 105 106" "quad 111 112 113 114" "spec 81 82 83 84" "geom 91 92 93 94 95 206 214" "sepvol 151 152 153 154 155 156 157 158 159 191 192 193 194 195 212 213 215 216 217 218 219 220 221 340 341 342 343 344 345 346 347 348" "dec 161 162 163 164 165 201 320 321" "ovl 171 172 173 371" "graft 181 182 202 203 204 205 209 210 360 361 362 363 364 365 366 367 368 369 373" "refit 409 410 411 412 413 414 415 416 417 418 420 421 422 424 425 426" "cut 427 428 429 430 431 432 433 434 435 436 437 438 439 440 441 442 443 444 445" "par 211" "regr 222 223 224 225 226 227 228 229 230 231 232 233 234 235 236 237"; do
 	set -- $spec
 	t=$1; shift
 	run "$t" 0
@@ -51,7 +51,12 @@ done
 runo 0
 bits 17
 for m in 96 97 98 107 108 146 147 148 310; do runo $m; done
-# The OBJ files t_snet, t_sepvol, t_dec and t_graft write, through the external closed-mesh checker (closed, manifold,
+# t_refit built with -fopenmp: the same bytes at 1, 2 and 12 threads, and the planted fault that joins its tiles in an
+# order that follows the thread count, to be caught
+runr() { exe="$B/t_refit_omp_$1"; build_run refit "$1" "t_refit -fopenmp" "$OPENMP"; } # mutant (0 = none)
+runr 0
+runr 419
+# The OBJ files t_snet, t_sepvol, t_dec, t_graft, t_refit and t_cut write, through the external closed-mesh checker (closed, manifold,
 # oriented, Euler characteristic and genus, winding, crossings). The second line of its -t output: field 8 the Euler
 # characteristic, 9 the genus, 19 positive for an outward surface, the last the verdict
 if [ -n "${MESHCHECK:-}" ]; then MC=$MESHCHECK; else MC=$(command -v meshcheck) || MC=; fi
@@ -87,6 +92,14 @@ mcrows "sepvol results" "sepvol " sepvolobj sepvol "twoball 4 0 clean" "pair 4 0
 # mk_decimate's and the graft's results (the hollow ball: two shells, the inner one inward)
 mcrows "dec and graft results" "" decobj "dec graft" "dec_sphere 2 0 clean" "dec_torus 0 1 clean" "dec_hollow 4 0 clean" \
 	"mtet_sphere 2 0 clean" "mtet_torus 0 1 clean" "graft 2 0 clean"
+# mk_refit's results: a ball cut clear of another, an open sheet's shell, a thin slab, two overlapping balls as one, a
+# ball cut in two by an open sheet
+mcrows "refit results" "" refitobj refit "refit_ball 2 0 clean" "refit_sheet 2 0 clean" "refit_slab 2 0 clean" \
+	"refit_union 2 0 clean" "refit_slot 4 0 clean"
+# mk_cut's pieces: a U tube's two middle pieces (two caps each), a ball's half, a torus's two halves; the half with its
+# + side cap not reversed must read FAULT (the negative control)
+mcrows "cut results" "" cutobj cut "cut_u1 2 0 clean" "cut_u2 2 0 clean" "cut_ball0 2 0 clean" "cut_torus0 2 0 clean" \
+	"cut_torus1 2 0 clean" "cut_flip 2 -1 FAULT"
 # test/negctl.sh: the negative controls of the rows no planted fault in the headers reaches, each to fail on its
 # known-bad input; test/drvctl.sh: the verdicts of test/judge.sh itself, each on a known-bad input
 CC="$CC" CFLAGS="$CFLAGS0" sh test/negctl.sh; wrong=$((wrong + $?))

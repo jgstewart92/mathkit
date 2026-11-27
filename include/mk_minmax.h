@@ -1,17 +1,20 @@
-/* mk_minmax.h: fmax, fmin, fmaxf and fminf inline, with glibc's results bit for bit. The C library's are calls the
-   compiler doesn't inline, which costs real time in code that clamps a lot.
+/* mk_minmax.h: fmax, fmin, fmaxf and fminf inline, with the results of glibc 2.44 bit for bit. The C library's are calls
+   the compiler doesn't inline, which costs real time in code that clamps a lot.
 
    Ordered arguments are decided here. Unequal: the larger (fmax) or the smaller (fmin). Equal, +0 and -0 included:
    fmax gives y when x's sign bit is set and x otherwise, fmin gives x when x's sign bit is set and y otherwise, so -0
-   counts below +0 and the result is glibc's. A pair with a NaN goes to the C library's own function, through a pointer
-   the compiler cannot see into, so a NaN result has the library's bits (asked as builtins, gcc folds NaN cases by its own
-   rule, which differs from glibc's).
+   counts below +0 and the result is the same on every machine. A pair with a NaN goes to the C library's own function,
+   through a pointer the compiler cannot see into, so a NaN result has the library's bits (asked as builtins, gcc folds
+   NaN cases by its own rule, which differs from glibc's).
+
+   The contract is that order, not the linked library's. glibc 2.44 orders zeros so. Others need not: glibc 2.39's x86-64
+   fmax and fmin give an equal pair's second operand by their source, so their fmax(+0, -0) is -0. Only a zero's sign can
+   differ: unequal arguments leave no choice, and a NaN's result is always the linked library's.
 
    mk_fmax, mk_fmin, mk_fmaxf and mk_fminf are the calls. Defined before this header (or passed as -DMK_MINMAX_LIBM with
    -include mk_minmax.h), MK_MINMAX_LIBM also makes fmax, fmin, fmaxf and fminf in the including unit mean these. The header
    doesn't include <math.h>, so it can be -included ahead of a unit's own feature macros; <math.h> included later is
-   fine. With another C library a NaN still goes to that library; its ordered results may differ from these only where it
-   orders signed zeros differently. */
+   fine. */
 #ifndef MK_MINMAX_H
 #define MK_MINMAX_H
 
@@ -53,7 +56,11 @@ static inline float mk_fminf(float x, float y)
 #else
     if (__builtin_isunordered(x, y)) return mk_fminf_lib_(x, y);
 #endif
+#if defined(MK_MUTATE) && MK_MUTATE == 382
+    if (x == y) return x; /* planted fault: equal arguments give x, so fminf(+0, -0) is +0 */
+#else
     if (x == y) return __builtin_signbit(x) ? x : y;
+#endif
     return x < y ? x : y;
 }
 

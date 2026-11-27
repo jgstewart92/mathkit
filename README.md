@@ -1,10 +1,11 @@
 # mathkit
 
-mathkit is a header-only C23 kit of numerical and geometric methods: small dense linear algebra, sparse Krylov
-solvers, FFTs and spectral analysis, quadrature, ODE steppers, optimizers, statistics, interpolation, random numbers,
-rate laws in temperature, and triangle-mesh geometry (BVH queries, signed distance grids, surface nets, a triangle order
-for the vertex cache). It needs only libc and libm. Built with `-fopenmp`, its hot loops run on OpenMP threads; without
-it they run serially and give the same results. This is version 1.10.1 (`MK_VERSION` in `include/mk_version.h`).
+mathkit is a header-only C23 kit of numerical and geometric methods: small dense linear algebra, sparse Krylov solvers,
+FFTs and spectral analysis, quadrature, ODE steppers, optimizers, statistics, interpolation, random numbers, rate laws
+in temperature, and triangle-mesh geometry (BVH queries, signed distance grids, surface nets, a triangle order for the
+vertex cache, plane cuts into closed pieces). It needs only libc and libm. Built with `-fopenmp`, its hot loops run on
+OpenMP threads; without it they run serially and give the same results. This is version 1.12.1 (`MK_VERSION` in
+`include/mk_version.h`).
 
 ## Using it
 
@@ -55,7 +56,7 @@ make bench          # CG on a 64^3 Laplacian (OMP=1: threaded); BVH query rates 
 - each test `test/t_*.c` passes on the real headers: it exits 0 with at least one PASS row and no FAIL row, within
   `LIMIT` seconds (default 120). A SKIP row, one that cannot run on this machine, is printed and counted in
   `skipped`, never as a pass;
-- every planted fault but one is caught. The headers hold 192 test-only faults, each under `MK_MUTATE == N`.
+- every planted fault but two is caught. The headers hold 231 test-only faults, each under `MK_MUTATE == N`.
   check.sh builds the fault's test with `-DMK_MUTATE=N`, and the test must print a FAIL row; a timeout, a crash or a
   bare nonzero exit is not a catch (the rules are in `test/judge.sh`). Never define `MK_MUTATE` outside the tests;
 - `t_par`, built with `-fopenmp`, gives the same bytes at 1, 2 and 12 threads, and its result hashes (BITS lines) equal
@@ -64,12 +65,12 @@ make bench          # CG on a 64^3 Laplacian (OMP=1: threaded); BVH query rates 
   input, and `test/drvctl.sh` shows each of judge.sh's verdicts on a known-bad program.
 
 The mesh rows in check.sh use an external closed-mesh checker, `meshcheck`, which is not part of this repository.
-check.sh runs `$MESHCHECK` when it is set (`make check MESHCHECK=path`), else `meshcheck` on `PATH`. With neither,
-each of the 24 mesh rows prints SKIP, so an otherwise clean run ends with `wrong: 0, skipped: 24` (or more); a
-`MESHCHECK` that is not an executable is WRONG. check.sh runs `$MESHCHECK -t FILE.obj` on the OBJ files that t_snet,
-t_sepvol, t_dec and t_graft write, and reads the second line as tab-separated fields: the Euler characteristic in field
-8, the genus in field 9, the signed volume in field 19 (positive for an outward mesh), and `clean` or `FAULT` in the
-last field.
+check.sh runs `$MESHCHECK` when it is set (`make check MESHCHECK=path`), else `meshcheck` on `PATH`. With neither, each
+of the 35 mesh rows prints SKIP, so an otherwise clean run ends with `wrong: 0, skipped: 35` (or more); a `MESHCHECK`
+that is not an executable is WRONG. check.sh runs `$MESHCHECK -t FILE.obj` on the OBJ files that t_snet, t_sepvol,
+t_dec, t_graft, t_refit and t_cut write, and reads the second line as tab-separated fields: the Euler characteristic
+in field 8, the genus in field 9, the signed volume in field 19 (positive for an outward mesh), and `clean` or `FAULT`
+in the last field.
 
 Two more rows skip when what they need is missing: t_rng's bit-for-bit comparison with an independent xoshiro256**
 header (`make check RIBBON_RNG_H=path/ribbon_rng.h`, a header that defines `RbRng`, `rb_seed` and `rb_next`), and
@@ -80,7 +81,8 @@ address-space limit.
 
 With `-fopenmp` these run on threads: `mk_csr_matvec`, `mk_cg` and `mk_bicgstab` (all but IC(0)'s triangular solves),
 `mk_sdf_mesh` and `mk_sdf_mesh_box`, the batch queries `mk_bvh_nearest_many`, `mk_bvh_inside_many` and
-`mk_winding_number_many`, and `mk_hhd_split`. Without `-fopenmp` the pragmas compile out.
+`mk_winding_number_many`, `mk_hhd_split`, and `mk_refit` (its tiles) and `mk_refit_check`. Without `-fopenmp` the
+pragmas compile out.
 
 Results do not depend on the thread count. Work is cut into blocks whose length depends only on the item count (4096
 items, or longer so there are at most 256 blocks; `mk_par.h`). Each block runs serially, and a sum adds the blocks'
@@ -125,6 +127,15 @@ What the mesh parts, the any-length FFT and the motion split guarantee:
 - `mk_mtet`: closed and manifold inside the box, wound outward, no triangle with |2A| under 0.01 h^2; a part with no
   solid or gap thinner than 2 h keeps its components and Euler characteristic, and a ball's volume is low by about
   (h/R)^2 / 2.
+- `mk_refit`: a result with status `MK_REFIT_OK` is closed, has no crossing pair, a positive volume, and passes
+  `mk_refit_check` against every obstacle given: no crossing pair with it, no vertex inside it (when it is closed) or of
+  it inside the result, and a least gap, face to face, of at least `gap_ok`. With a target volume the part grows only while it stays
+  under the target, so it ends over it only when the build without growth already is. Its bytes are the same at any
+  thread count.
+- `mk_cut_loops` and `mk_cut_clip`: on 0, every region with its caps (`mk_cut_piece`) is closed and wound as the input,
+  each cap's vertices and triangles are those of both regions it closes (wound opposite), the regions' volumes sum to the
+  split surface's, every new vertex is `V[a] + t (V[b] - V[a])` of its source edge bit for bit, and no input vertex moves
+  farther than `snap`, nor any but those a loop passes through.
 - `mk_vcache_order`: the result is a permutation of the input's triangles, each with its three indices in their order;
   the scores are integers, so the same input gives the same bytes on every machine and compiler; on a shuffled
   160 x 160 grid and a shuffled 120 x 96 sphere, ACMR at most 0.75, 0.72 and 0.70 at caches 16, 32 and 64.
@@ -136,7 +147,7 @@ What the mesh parts, the any-length FFT and the motion split guarantee:
 | mk_version.h | the version | MK_VERSION, MK_VERSION_MAJOR, MK_VERSION_MINOR, MK_VERSION_PATCH |
 | mk_par.h | the block scheme behind the threads | mk_par_blk, mk_par_nblk, mk_par_range |
 | mk_vec.h | 3-vectors, unit quaternions (w, x, y, z), rigid transforms | `mk_v3_*`, `mk_q_*`, `mk_xf_*`, mk_lerp |
-| mk_minmax.h | fmax, fmin, fmaxf and fminf inline, glibc's results bit for bit | mk_fmax, mk_fmin, mk_fmaxf, mk_fminf; MK_MINMAX_LIBM |
+| mk_minmax.h | fmax, fmin, fmaxf and fminf inline, the results of glibc 2.44 bit for bit, -0 below +0 | mk_fmax, mk_fmin, mk_fmaxf, mk_fminf; MK_MINMAX_LIBM |
 | mk_rng.h | `xoshiro256**` streams, splitmix64, Neumaier sum | mk_rng_seed, mk_rng_u01, mk_rng_gauss, mk_sum_add |
 | mk_stats.h | selection, median, type-7 quantiles, Welford | mk_select, mk_median, mk_quantile, `mk_welford_*` |
 | mk_interp.h | 1-D PCHIP, natural cubic spline, linear | mk_pchip_eval, mk_spline_slopes, mk_hermite_eval |
@@ -156,7 +167,9 @@ What the mesh parts, the any-length FFT and the motion split guarantee:
 | mk_sepvol.h | interpenetrating closed meshes moved apart | mk_sepvol, mk_sepvol_multi, mk_sepvol_restore |
 | mk_dec.h | decimation without folds or crossings | mk_decimate, mk_decimate_map, mk_dec_defaults |
 | mk_graft.h | marching tetrahedra; a mesh region replaced | mk_mtet, mk_graft_patch, mk_graft_stitch |
+| mk_refit.h | a part rebuilt closed and clear of the meshes round it; the contact test between two meshes | mk_refit, mk_refit_check, mk_refit_obj_init, mk_refit_open_edges, mk_refit_defaults |
 | mk_vcache.h | a triangle order for the post-transform vertex cache (Forsyth); its cache misses | mk_vcache_order, mk_vcache_acmr |
+| mk_cut.h | a closed mesh cut along planes into closed pieces that join exactly, each new vertex's source; a plane's loops probed | mk_cut_loops, mk_cut_clip, mk_cut_piece, mk_cut_defaults, `mk_cut_probe_*` |
 | mk_rate.h | how a rate, a relaxation time or a viscosity follows temperature | mk_rate_q, mk_rate_arrhenius, mk_rate_wlf_log10, mk_rate_walther |
 
 Each header's top comment describes its method, layouts and limits; each call's comment gives its arguments and
@@ -179,20 +192,25 @@ return values.
   failure: no memory in `mk_ode23s` and `mk_bdf_step`, an unusable held mesh in `mk_sepvol`, `mk_sepvol_multi` and
   `mk_sepvol_restore`. Calls that return a value say how they fail: `mk_lstsq`, `mk_lm` and `mk_vcache_acmr` return
   -1, `mk_nm` and the `mk_rate` laws NaN (`mk_rate_walther_fit` -1); `mk_lbfgs` and `mk_cmaes` set `status` to -1 (and
-  return NaN when they cannot start). `mk_vcache_order` leaves the list untouched when it returns -1.
+  return NaN when they cannot start). `mk_vcache_order` leaves the list untouched when it returns -1. `mk_refit` returns
+  its status, 0 to 3 (clear, in contact, not closed or crossing itself, nothing left), with its result, and -1 with
+  none; `mk_refit_check` 1 for a contact and 0 for none. `mk_cut_loops` and `mk_cut_clip` return 1 to 8 for a refusal
+  (`MK_CUT_*`, the cut in `out->bad`) and -1 for a bad argument or no memory, each with `out->reason` and no result.
 - Memory: a call that builds an object (`mk_fft_plan`, `mk_spec_init`, `mk_csr_from_triplets`, `mk_bvh_build`,
-  `mk_sdf_mesh`, `mk_snet_build`, `mk_hhd_init`, `mk_graft_init`, `mk_mtet`) allocates it with `malloc`. Free it with
-  the matching `*_free` (`mk_gmesh_free` for a mesh), which is also safe after a failed build. `mk_snet_faces` returns
-  a `malloc`'d array for `free`. Calls that need scratch space either take a work array from the caller
-  (`MK_RK4_WORK(n)`, `MK_DOPRI_WORK(n)`, `mk_fftm_c`'s `work`) or allocate and free it within the call.
-- Borrowed pointers: a tree (`mk_bvh`), a graft (`mk_graft`) and a potential (`mk_vp`) keep pointers to the caller's
-  arrays, which must outlive them.
+  `mk_sdf_mesh`, `mk_snet_build`, `mk_hhd_init`, `mk_graft_init`, `mk_mtet`, `mk_refit_obj_init`, `mk_refit`,
+  `mk_cut_loops`, `mk_cut_clip`, `mk_cut_probe_init`) allocates it with `malloc`. Free it with the matching `*_free`
+  (`mk_gmesh_free` for a mesh), which is also safe after a failed build. `mk_snet_faces` returns a `malloc`'d array for
+  `free`. Calls that need scratch space either take a work array from the caller (`MK_RK4_WORK(n)`, `MK_DOPRI_WORK(n)`,
+  `mk_fftm_c`'s `work`) or allocate and free it within the call.
+- Borrowed pointers: a tree (`mk_bvh`), a graft (`mk_graft`), a potential (`mk_vp`) and an obstacle (`mk_refit_obj`)
+  keep pointers to the caller's arrays, which must outlive them.
 - Threads: no call has global or static mutable state. An object a call takes as `const` (a plan, tree, matrix or grid)
   is only read, so threads may share it. Each thread needs its own `mk_rng`, `mk_sum`, `mk_welford` and work arrays.
-- Non-finite values: `mk_sdf_mesh`, `mk_overlap_volume`, the three `mk_sepvol` calls, `mk_decimate` and
-  `mk_graft_init` refuse non-finite coordinates (`mk_bvh_build` does not check them). The solvers return -1 for a NaN
-  or vanishing pivot or a non-finite answer rather than return it. The statistics calls need NaN-free input and give
-  NaN for an empty array. `mk_sum` gives the IEEE result once the sum is not finite.
+- Non-finite values: `mk_sdf_mesh`, `mk_overlap_volume`, the three `mk_sepvol` calls, `mk_decimate`, `mk_graft_init`,
+  `mk_refit`, `mk_refit_obj_init`, `mk_cut_loops` and `mk_cut_clip` refuse non-finite coordinates (`mk_bvh_build` does
+  not check them). The solvers return -1 for a NaN or vanishing pivot or a non-finite answer rather than return it. The
+  statistics calls need NaN-free input and give NaN for an empty array. `mk_sum` gives the IEEE result once the sum is
+  not finite.
 - Units are the caller's, except temperatures in K where `mk_rate_arrhenius` and `mk_rate_walther` need them, and the
   latter's mm^2/s. Angles are in radians, except `mk_dec_opts`' `minangle` and `fold`, in degrees.
 - FFTs: forward is e^{-i}, inverse e^{+i}, and neither is normalized.
@@ -203,8 +221,8 @@ return values.
 
 ## Known limits
 
-- `mk_minmax.h` gives glibc's results. With another C library a NaN still goes to that library's function, and its ordered
-  results may differ only where that library orders -0 and +0 differently.
+- `mk_minmax.h` orders -0 below +0 on every machine. A NaN goes to the linked C library's function. glibc 2.44 orders zeros the
+  same way; an older glibc or another C library may not, so only a zero's sign can differ from its own `fmax` and `fmin`.
 - No sparse direct solver, multigrid or ILU. IC(0)'s triangular solves are serial.
 - `mk_bdf_step` is one step without error control: the caller chooses h.
 - `mk_winding_number` costs O(triangles) per point, and so does each node of an odd row in `mk_sdf_mesh`.
@@ -233,6 +251,17 @@ return values.
   Where S's rim turns sharply by a patch rim vertex, the patch's fans can fold through S's rim triangles, and the stitch
   refuses with 5.
 - `mk_mtet` keeps no solid or gap thinner than 2 h: a sheet that thin falls apart into pieces.
+- `mk_refit` keeps a part thinner than 2 h only through its shells: a closed piece thinner than `thin` comes back
+  thickened by about h on every side, and an open one as a slab max(shell, shell_h h) thick on each side, so a thin
+  part can end with more volume than its source.
+- `mk_refit`'s sign: under `MK_REFIT_PARITY` two pieces that overlap read hollow where they overlap (filled again when
+  the hollow is closed off and voids are dropped); under `MK_REFIT_UNION` a cavity a piece encloses reads solid; a piece
+  that folds through itself reads hollow where it covers a region twice under both.
+- `mk_refit` builds the clearance into the field and only then checks it: a result still in contact after `tries`
+  builds is returned with `MK_REFIT_CONTACT`. Its time goes mostly to `mk_decimate`, which is single-threaded, and to
+  the tiles the band touches, not to the part's area alone.
+- `mk_refit_check` counts no vertex inside an open mesh, and a closed mesh flagged open is read that way: a part lying
+  inside it passes if it crosses none of its faces and keeps the gap. Whether a mesh is closed is the caller's flag.
 - `mk_fftm_c` without the memory for a Bluestein length falls back to the direct sum, right but O(n^2).
 - `mk_vcache_order` rescores a vertex's remaining triangles on every step it stays in the cache, so a vertex used by
   n triangles costs O(n^2) in all: a fan of 80,000 triangles round one vertex took 3.6 s, and 1.77 M triangles of a body
@@ -240,6 +269,19 @@ return values.
   (1,431,655,765) triangles. At a dead end it takes the lowest-numbered triangle left, not the best-scoring one.
 - ACMR under a FIFO is a model: GPUs reuse vertex shader results in their own ways, and a GPU can run the shader well
   over once per ACMR miss, so the speedup an order brings is measured on the GPU.
+- `mk_cut`: a loop with another loop of its plane inside it (a pocket, a hole) is refused, `MK_CUT_NESTED`: there is no
+  cap with holes. Planes whose loops cross one triangle are refused, `MK_CUT_CROSS`: cut them one after another, each on
+  the last result. A vertex within `snap` where the plane passes beside it twice (a saddle) is left in place, and a new
+  vertex held at 0.001 of its edge lies off the plane by up to 0.001 of the edge's height across it.
+- `mk_cut`'s caps are ear clipped, the best-shaped ear first, with no Delaunay pass: a tube's 96-point loop gives a worst
+  cap triangle of 0.0032 (twice its area over its squared edges; 0.29 for an equilateral), the first valid ear each time
+  0.0006; on a flat 8:1 ellipse of 128 points the first valid ear does better, 0.0006 against 0.0002. Ear clipping costs
+  up to O(n^3) in a loop's n vertices, and each plane (each step of a moved plane) is traced over every triangle.
+- `mk_cut` refuses rather than returns these, and moves no plane for them: a plane lying on a flat face with its normal
+  into the solid (`MK_CUT_NOLOOP`), a loop through one vertex twice (`MK_CUT_CAP`; a saddle near a plane is the usual
+  cause), two loops meeting at a snapped vertex (`MK_CUT_CROSS`), a loop's side holding two regions, a snap large against
+  the edges near a cut, which can leave a piece open, and a cut's point within `shift` of the surface, which can leave
+  a piece inside out (each `MK_CUT_SPLIT`). Every piece is checked closed and wound as the input before 0 is returned.
 - `mk_rate_wlf_log10` describes a polymer from its glass temperature to about 100 K above it; under Tref - 0.99 C2 it is
   held, not a glass law. `mk_rate_walther` is for 2 mm^2/s and more, and knows nothing of the wax or polymer that thickens
   a cold oil. Subtracting 1/T and 1/Tref costs `mk_rate_arrhenius` up to theta (1/T + 1/Tref) times 2^-53 of its result.
@@ -248,7 +290,8 @@ return values.
 
 - t_vec: known turns, composition, matrix round trips, inverse transforms, slerp, constant-rate integration, `mk_lerp`.
 - t_minmax: `mk_fmax`, `mk_fmin`, `mk_fmaxf` and `mk_fminf` bit for bit against the C library on every pair of special
-  values and 4 million random pairs, and `MK_MINMAX_LIBM` with `<math.h>` included after the header.
+  values and 4 million random pairs, the mixed zeros apart; -0 below +0 both ways round, in double and float, on its own;
+  a NaN; whether the C library orders zeros the same; and `MK_MINMAX_LIBM` with `<math.h>` included after the header.
 - t_vcache: the scores against their formulas; a shuffled grid and a shuffled sphere reordered (ACMR at caches 16, 32
   and 64 under the bounds in Stability and below the input's, a permutation with each triangle's indices in order, the
   same bytes from two runs and the bytes recorded for this version); equal scores to the lowest index; triangles listed
@@ -312,13 +355,33 @@ return values.
   triangle), then a dent carved into a sphere and stitched back closed, against the analytic volume, with the untouched
   triangles kept; the patch unthinned, on a fine sphere and a coarse one; each return code over 0 on an input made to
   give it, in their order, and the refusals with their reasons; writes OBJ for meshcheck.
+- t_refit: the checker on pairs with known answers (two balls 0.03 apart against the gap by brute force, one inside
+  another, crossing balls, an open sheet through a ball read with and without an inside, a needle through a plate either
+  way round, a pair past reach, an edge over a plate with no vertex near); edge uses; refits of a ball against a ball it overlaps, an open sheet and a thin closed
+  slab (their shells against the swept volumes), two balls as one source, two overlapping balls (one solid piece under
+  `MK_REFIT_UNION`, the overlap hollow under `MK_REFIT_PARITY`), a hollow ball with its void dropped and kept, a ball
+  over 2 x 2 x 2 tiles, a ball cut in two by an open sheet; a first try in contact and the wider gap after it; a target
+  volume reached from below and never passed; the budget's h against its formula; refusals; with `-fopenmp`, the same
+  bytes at 1, 2 and 12 threads; writes OBJ for meshcheck.
+- t_cut: a U tube cut three times, only each plane's loop round its point (the left leg's plane crosses the right leg
+  too), the pieces closed, wound one way and outward, the volumes summing to the whole, each cap in its two pieces wound
+  opposite, each cap vertex on its plane, every new vertex from its source edge bit for bit, the caps' worst triangle; a
+  cut 2 um off a ring of vertices, which snaps onto it; a cone whose plane moves one step to pass rmax; a ball clipped
+  by one plane and by three in one call, and wound inward (the pieces wound so too); a torus clipped through its axis
+  (two loops, two halves) and through its equator (nested, refused); a plane beside a saddle vertex, which keeps its
+  place, and one a dimple short of a vertex, not cut; the probe on a tube inside a tube; each refusal; writes OBJ for
+  meshcheck.
 - t_regr: exact inputs that once gave wrong results, hangs or overflows in mk_ovl, mk_dec, mk_graft, mk_geom and mk_sdf;
   calls that could hang run in a child process under a CPU limit.
 - t_par: with `-fopenmp`, every threaded call at 1, 2 and 12 threads, batches against single calls, and BITS hashes.
 
 No test reaches Nelder-Mead's shrink step on its own, the NaN guard in the error norms of `mk_ode23s` and `mk_bdf_step`
-with a finite value after the NaN, `mk_decimate`'s mark wrap, or the rule in `mk_graft_init` that puts a vertex just
-off the seam on its neighbours' side (planted fault 372, which changes results only on large meshes).
+with a finite value after the NaN, `mk_decimate`'s mark wrap, the rule in `mk_graft_init` that puts a vertex just
+off the seam on its neighbours' side (planted fault 372, which changes results only on large meshes), or `mk_refit`'s
+margin on carrying a node's inside state (planted fault 423: without it, a node within rounding of a face on a tile's
+face can take one sign in one tile and the other in its neighbour, and the surface opens there; seen once in a
+30,000-triangle part at h 0.1 mm). `mk_cut`'s `MK_CUT_SPLIT` is reached by large snaps,
+points at the surface and a loop's side holding two regions (rows in t_cut and the fuzz harness).
 
 ## References
 
@@ -378,6 +441,37 @@ off the seam on its neighbours' side (planted fault 372, which changes results o
   ASTM D341, "Viscosity-temperature equations and charts for liquid petroleum or hydrocarbon products".
 
 ## Changes
+
+1.12.1:
+- `mk_cut`: every piece is checked closed and wound as the input before 0 is returned (a large snap could leave one open,
+  a point at the surface one inside out); an input with an edge used the same way round twice is refused; a plane only
+  touching the mesh reads `MK_CUT_NOLOOP`; a loop through one vertex twice, and two loops meeting at a snapped vertex,
+  are refused; the plane moves in whole steps up to `shift`; flat loops (collinear corners) are capped; an ear
+  clipper's failed allocation returns -1.
+
+1.12.0:
+- `mk_cut.h`: a closed mesh cut along planes into closed pieces that join exactly. `mk_cut_loops` cuts only the loop of
+  each plane that winds round its point, `mk_cut_clip` every loop; each loop gets one cap shared by its two pieces, wound
+  opposite; each new vertex comes with its source edge and fraction, to carry weights or other per-vertex values; a probe
+  tries planes on one mesh. No other header changed.
+
+1.11.1:
+- `mk_refit_check` measures the gap face to face, not only from vertices to faces, so two faces nearer than `gap_ok`
+  with no vertex near read as a contact (and `mk_refit` no longer returns `MK_REFIT_OK` short of its own gap).
+- `mk_refit` grows toward a target until it is met from under, halving back once over it (it could stop on a build
+  over the target and return the ungrown part); its lattice box is that of the vertices faces use, so a stray vertex
+  costs nothing; sizes past a double's range are refused; a grown piece is no longer counted lost.
+
+1.11.0:
+- `mk_refit.h`: a part rebuilt closed, uncrossed and clear of the meshes round it, every piece kept, on a signed
+  distance field in a band on sparse tiles, retried with a wider gap on contact and optionally grown toward a target
+  volume; and `mk_refit_check`, the contact test it uses, for a caller's own check. No other header changed.
+
+1.10.2:
+- `mk_minmax.h`: its order of zeros, -0 below +0, is the contract, the same on every machine (glibc 2.44 agrees; older ones
+  may not). The comments and tests say so; no result changes.
+- `mk_rate_arrhenius` no longer gives NaN, 0 or INFINITY where a reciprocal of a temperature under 2^-1024 K overflows and the
+  answer is representable; every other input gives the bits it gave.
 
 1.10.1:
 - `mk_rate_walther_fit` refuses a second point at 0 K or INFINITY; it accepted one and gave a curve with no temperature in

@@ -60,6 +60,17 @@ static void arrhenius_rows(void)
     CHECK(fabs(E - 52.948e3) < 5 && fabs(f2 - 2) < 1e-13, "mk_rate_arrhenius: %.3f kJ/mol doubles a rate from 298.15 to 308.15 K (2 %+.1e)", E * 1e-3, f2 - 2);
     CHECK(fabs(MK_RATE_GAS_R / (6.02214076e23 * 1.380649e-23) - 1) < 1e-15, "MK_RATE_GAS_R is Avogadro's number times Boltzmann's");
     CHECK(mk_rate_arrhenius(1e-300, 300, 9000) == 0 && mk_rate_arrhenius(INFINITY, INFINITY, 9000) == 1, "mk_rate_arrhenius: 0 toward 0 K, 1 with both infinite");
+    const struct { double T, Tr, th; } tiny[] = {{1e-310, 1e-310, 1}, {1e-310, 2e-310, 1e-310}, {2e-310, 1e-310, 1e-310}, {1e-310, 300, 0},
+        {300, 1e-310, 0}, {1e-310, 300, 1e-310}, {300, 1e-310, 1e-310}, {1e-310, INFINITY, 1e-310}, {INFINITY, 1e-310, 1e-310}, {5e-324, 5e-324, 9000},
+        {5e-309, 1e-320, 1e-320}, {1e-310, 300, 1}, {300, 1e-310, 1}, {1e-310, 1e-310, -1}};
+    int nt = 0;
+    const int NT = sizeof tiny / sizeof *tiny;
+    for (int i = 0; i < NT; i++) {
+        const long double y = -(long double)tiny[i].th * (1 / (long double)tiny[i].T - 1 / (long double)tiny[i].Tr), want = expl(y);
+        const double f = mk_rate_arrhenius(tiny[i].T, tiny[i].Tr, tiny[i].th);
+        nt += isinf((double)want) ? isinf(f) && f > 0 : (double)want == 0 ? f == 0 : relerr(f, want) < U * (2 + 8 * fabsl(y));
+    }
+    CHECK(nt == NT, "mk_rate_arrhenius: temperatures under 2^-1024 K, where a reciprocal overflows, against expl (%d of %d)", nt, NT);
     /* a history of two constant pieces, 100 s at 300 K and 50 s at 350 K, at 320 K: the sum over 0.25 s steps against the
        two pieces' closed form, and the time at 350 K that does what the history did */
     const double th = 9000, Tr = 320;

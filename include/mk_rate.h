@@ -53,7 +53,13 @@ static inline double mk_rate_arrhenius(double T, double Tref, double theta)
 #elif defined(MK_MUTATE) && MK_MUTATE == 403
     return exp(-theta * (1 / T - 1 / Tref)); /* planted fault: no refusal at and below 0 K */
 #else
-    return T > 0 && Tref > 0 ? exp(-theta * (1 / T - 1 / Tref)) : NAN;
+    if (!(T > 0 && Tref > 0)) return NAN;
+    const double d = 1 / T - 1 / Tref;
+#if !(defined(MK_MUTATE) && MK_MUTATE == 408) /* planted fault: a reciprocal's overflow left */
+    /* a reciprocal overflows under 2^-1024 K: both temperatures 2^600 times as large, and the power given back last */
+    if (!isfinite(d)) return exp(ldexp(-theta * (1 / (T * 0x1p600) - 1 / (Tref * 0x1p600)), 600));
+#endif
+    return exp(-theta * d);
 #endif
 }
 
